@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>스마트 설비 P.M 시스템</title>
+    <title>금호피앤비화학 스마트 P.M 점검</title>
     
     <!-- 지도(Import Map): 라이브러리 경로 안내 -->
     <script type="importmap">
@@ -35,6 +35,7 @@
         .unit-input { padding-right: 4.5rem !important; }
         @media print { .no-print { display: none; } }
         
+        /* 🍎 미점검 레드 서클 애니메이션 */
         .red-circle {
             width: 10px;
             height: 10px;
@@ -133,7 +134,7 @@
                 <div className="min-h-screen flex items-center justify-center bg-slate-100 p-4">
                     <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-sm border border-slate-200 text-center">
                         <div className="flex justify-center mb-6"><div className="bg-blue-100 p-3 rounded-full"><Wrench className="w-8 h-8 text-blue-700" /></div></div>
-                        <h1 className="text-2xl font-bold text-center text-slate-800 mb-2 tracking-tight font-black">PM SMART</h1>
+                        <h1 className="text-2xl font-black text-center text-slate-800 mb-2 tracking-tight">금호피앤비화학<br/>스마트 P.M 점검</h1>
                         <p className="text-center text-sm text-slate-500 mb-8 font-medium">현장 점검자 성함을 입력해 주세요.</p>
                         <input type="text" placeholder="이름 (예: 홍길동)" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl mb-4 focus:ring-2 focus:ring-blue-500 font-bold outline-none text-center" value={name} onChange={e => setName(e.target.value)} onKeyDown={e => e.key === 'Enter' && name.trim() && onLogin(name.trim())} />
                         <button onClick={() => name.trim() && onLogin(name.trim())} className="w-full bg-blue-700 hover:bg-blue-800 text-white font-bold py-4 rounded-xl shadow-lg transition-all active:scale-95 font-black">클라우드 접속</button>
@@ -146,7 +147,7 @@
             const activeItems = items.filter(item => data[item] !== undefined);
             if (activeItems.length === 0) return null;
             return (
-                <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 mb-6 transition-all">
+                <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 mb-6 transition-all hover:border-blue-100">
                     <div className="flex items-center mb-4 border-b border-slate-50 pb-2">
                         <Icon className="w-5 h-5 text-slate-500 mr-2" />
                         <span className="font-bold text-slate-800 font-black">{title}</span>
@@ -330,6 +331,7 @@
 
             const showMessage = (msg, type = 'success') => { setToast({ show: true, message: String(msg), type }); setTimeout(() => setToast(p => ({ ...p, show: false })), 3000); };
 
+            // 💡 미점검 필터링 로직
             const checkOverdue = useCallback((eq) => {
                 if (eq.eqClass === 'C' || eq.eqClass === 'D') return false; 
                 const eqRecords = records.filter(r => r.equipmentId === eq.id);
@@ -349,6 +351,7 @@
                 return false;
             }, [records]);
 
+            // 💡 정렬: 1. 등급순(A-D) 2. 미점검 우선
             const sortedEquipments = useMemo(() => {
                 const weights = { 'A': 1, 'B': 2, 'C': 3, 'D': 4 };
                 return [...equipments].sort((a, b) => {
@@ -466,9 +469,9 @@
                 const link = document.createElement("a"); link.setAttribute("href", url); link.setAttribute("download", "PM_Sample.csv"); link.click();
             };
 
-            // 💡 [해결] PDF 다운로드 시 잘림 방지 스타일 적용
-            const handleDownloadPDF = async (targetId) => {
-                setIsGeneratingPDF(true); showMessage('PDF 생성 중...');
+            // 💡 [개선] 1장 맞춤 비율(Auto Scaling)이 적용된 PDF 다운로드 로직
+            const handleDownloadPDF = async (targetId, fitOnePage = false) => {
+                setIsGeneratingPDF(true); showMessage('PDF 저장 중...');
                 try {
                     const targetElement = document.getElementById(targetId);
                     const originalStyle = targetElement.style.cssText;
@@ -482,21 +485,36 @@
                     const pdf = new jspdf.jsPDF('p', 'mm', 'a4');
                     const pdfWidth = pdf.internal.pageSize.getWidth();
                     const pdfHeight = pdf.internal.pageSize.getHeight();
-                    const imgHeight = (canvas.height * pdfWidth) / canvas.width;
                     
-                    let heightLeft = imgHeight; 
-                    let position = 0;
-                    
-                    pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, position, pdfWidth, imgHeight); 
-                    heightLeft -= pdfHeight;
-                    
-                    while (heightLeft > 0) { 
-                        position = heightLeft - imgHeight; 
-                        pdf.addPage(); 
-                        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, position, pdfWidth, imgHeight); 
-                        heightLeft -= pdfHeight; 
+                    let imgWidth = pdfWidth;
+                    let imgHeight = (canvas.height * pdfWidth) / canvas.width;
+
+                    // fitOnePage가 true(트렌드)이고 한 장 길이를 초과하면 비율 축소
+                    if (fitOnePage && imgHeight > pdfHeight) {
+                        const ratio = pdfHeight / imgHeight;
+                        imgHeight = imgHeight * ratio;
+                        imgWidth = imgWidth * ratio;
                     }
-                    pdf.save(`PM_Report_${new Date().toISOString().slice(0,10)}.pdf`); 
+
+                    const xOffset = (pdfWidth - imgWidth) / 2;
+
+                    if (fitOnePage || imgHeight <= pdfHeight) {
+                        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', xOffset, 0, imgWidth, imgHeight);
+                    } else {
+                        // 다중 페이지 처리 (종합 보고서 용)
+                        let heightLeft = imgHeight; 
+                        let position = 0;
+                        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, position, imgWidth, imgHeight); 
+                        heightLeft -= pdfHeight;
+                        while (heightLeft > 0) { 
+                            position = heightLeft - imgHeight; 
+                            pdf.addPage(); 
+                            pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, position, imgWidth, imgHeight); 
+                            heightLeft -= pdfHeight; 
+                        }
+                    }
+
+                    pdf.save(`금호피앤비화학_PM보고서_${new Date().toISOString().slice(0,10)}.pdf`); 
                     showMessage('저장 완료');
                 } catch (e) { showMessage('PDF 생성 실패', 'error'); } finally { setIsGeneratingPDF(false); }
             };
@@ -557,7 +575,7 @@
             return (
                 <div className="min-h-screen bg-slate-50 max-w-md mx-auto shadow-2xl flex flex-col relative overflow-hidden ring-1 ring-slate-200">
                     <header className="bg-blue-700 text-white p-4 sticky top-0 z-20 flex justify-between items-center shadow-md">
-                        <div className="flex items-center gap-2 font-black tracking-tight"><Wrench className="w-5 h-5" /><h1>스마트 P.M 기록</h1></div>
+                        <div className="flex items-center gap-2 font-black tracking-tight text-lg"><Wrench className="w-5 h-5" /><h1 className="text-[17px]">금호피앤비화학 스마트 P.M</h1></div>
                         <div className="flex items-center gap-2 bg-blue-800 px-3 py-1.5 rounded-full shadow-inner"><User className="w-3.5 h-3.5" /><span className="text-xs font-bold">{currentUser}</span></div>
                     </header>
 
@@ -592,16 +610,15 @@
                                 
                                 {historyView === 'trend' && historyEqId && (
                                     <div className="space-y-4 animate-in zoom-in-95">
-                                        {/* 💡 [해결 2] 트렌드 PDF 캡처 대상 외부로 저장 버튼 이동 */}
                                         <div className="flex gap-2 mb-2" data-html2canvas-ignore="true">
                                             <button onClick={() => handleDownloadExcel()} className="flex-1 bg-emerald-600 text-white py-2.5 rounded-xl text-[11px] font-black shadow-sm flex items-center justify-center gap-1 active:scale-95 transition-all"><FileSpreadsheet className="w-3.5 h-3.5" /> 데이터 엑셀 저장</button>
-                                            <button onClick={() => handleDownloadPDF('trend-view-container')} className="flex-1 bg-slate-800 text-white py-2.5 rounded-xl text-[11px] font-black shadow-sm flex items-center justify-center gap-1 active:scale-95 transition-all"><FileText className="w-3.5 h-3.5" /> 화면 PDF 저장</button>
+                                            {/* 💡 [해결 1] 트렌드 전용 PDF 저장: true 파라미터 전달 */}
+                                            <button onClick={() => handleDownloadPDF('trend-view-container', true)} className="flex-1 bg-slate-800 text-white py-2.5 rounded-xl text-[11px] font-black shadow-sm flex items-center justify-center gap-1 active:scale-95 transition-all"><FileText className="w-3.5 h-3.5" /> 화면 PDF 저장</button>
                                         </div>
-                                        
-                                        {/* 💡 [해결 1] 트렌드 대상 정보 헤더 추가 및 캡처 전용 컨테이너 명시 */}
                                         <div id="trend-view-container" className="bg-white p-6 pb-10 rounded-2xl shadow-sm border border-slate-200">
                                             <div className="mb-6 border-b-2 border-slate-800 pb-4">
-                                                <h2 className="text-xl font-black text-slate-900 tracking-tighter flex items-center gap-2"><TrendingUp className="w-5 h-5 text-blue-600" /> 설비 수치 트렌드 보고서</h2>
+                                                {/* 💡 [해결 2] 트렌드 보고서 명칭 변경 */}
+                                                <h2 className="text-xl font-black text-slate-900 tracking-tighter flex items-center gap-2"><TrendingUp className="w-5 h-5 text-blue-600" /> 금호피앤비화학 트렌드 보고서</h2>
                                                 <table className="text-[10px] text-left mt-3">
                                                     <tbody>
                                                         <tr><th className="p-1.5 bg-slate-50 border w-16 font-bold text-slate-500">점검 대상</th><td className="p-1.5 border font-black text-blue-700 tracking-tight">[{historyEqId}] {equipments.find(e=>e.id===historyEqId)?.name}</td></tr>
@@ -610,7 +627,6 @@
                                                     </tbody>
                                                 </table>
                                             </div>
-                                            {/* 💡 [해결 3] 하단 여백 부족으로 잘리는 현상 방지를 위해 컨테이너 여백 강화 */}
                                             <TrendChart records={chronologicalRecords} title="진동" category="vibration" items={['Motor', 'Gearbox', '본체', 'Oil Pump']} unit="mm/s" />
                                             <TrendChart records={chronologicalRecords} title="발열" category="heating" items={['Motor', 'Gearbox', '본체', 'Bearing']} unit="°C" />
                                         </div>
@@ -621,12 +637,18 @@
                                     <div className="space-y-4 animate-in slide-in-from-bottom-4">
                                         <div className="flex gap-2" data-html2canvas-ignore="true">
                                             <button onClick={handleDownloadExcel} className="flex-1 bg-emerald-600 text-white py-3.5 rounded-xl text-xs font-black shadow-md flex items-center justify-center gap-2 active:scale-95 transition-all"><FileSpreadsheet className="w-4 h-4" /> 엑셀 저장</button>
-                                            <button onClick={() => handleDownloadPDF('pdf-report-container')} disabled={isGeneratingPDF} className="flex-1 bg-slate-800 text-white py-3.5 rounded-xl text-xs font-black shadow-md flex items-center justify-center gap-2 active:scale-95 transition-all">{isGeneratingPDF ? '생성중...' : <><FileText className="w-4 h-4" /> PDF 보고서 저장</>}</button>
+                                            {/* 💡 종합 보고서 PDF 저장: false 파라미터 전달 (다중 페이지 적용) */}
+                                            <button onClick={() => handleDownloadPDF('pdf-report-container', false)} disabled={isGeneratingPDF} className="flex-1 bg-slate-800 text-white py-3.5 rounded-xl text-xs font-black shadow-md flex items-center justify-center gap-2 active:scale-95 transition-all">{isGeneratingPDF ? '생성중...' : <><FileText className="w-4 h-4" /> PDF 보고서 저장</>}</button>
                                         </div>
                                         <div className="overflow-x-auto border-2 border-slate-300 rounded-2xl bg-slate-200 hide-scrollbar shadow-inner">
                                             <div id="pdf-report-container" className="bg-white p-10 w-[850px] font-sans">
-                                                <div className="flex justify-between items-start mb-8 border-b-4 border-slate-900 pb-6"><div><h1 className="text-2xl font-black text-slate-900 mb-4 tracking-tighter uppercase font-black tracking-tight underline decoration-blue-500">PM 점검 종합 보고서</h1><table className="text-[10px] text-left"><tbody><tr><th className="border p-2.5 bg-slate-50 w-24 font-bold">조회 등급</th><td className="border p-2.5 font-bold text-blue-800 w-48">{historyEqClass}급 설비</td></tr><tr><th className="border p-2.5 bg-slate-50 font-bold">점검 대상</th><td className="border p-2.5 font-bold text-slate-800">{historyEqId ? `[${historyEqId}] ${equipments.find(e=>e.id===historyEqId)?.name}` : '그룹 내 전체 설비'}</td></tr><tr><th className="border p-2.5 bg-slate-50 font-bold">출력 일자</th><td className="border p-2.5 font-medium">{new Date().toLocaleDateString('ko-KR')}</td></tr></tbody></table></div><table className="text-xs text-center border-collapse mt-4 shadow-sm"><tbody><tr><th rowSpan="2" className="border-2 border-slate-800 p-3 bg-slate-100 text-sm font-black">결<br/>재</th><th className="border-2 border-slate-800 p-1.5 w-20 bg-slate-50 font-bold text-[10px]">담당</th><th className="border-2 border-slate-800 p-1.5 w-20 bg-slate-50 font-bold text-[10px]">검토</th><th className="border-2 border-slate-800 p-1.5 w-20 bg-slate-50 font-bold text-[10px]">확인</th><th className="border-2 border-slate-600 p-1.5 w-20 bg-slate-50 font-bold text-[10px]">승인</th></tr><tr><td className="border-2 border-slate-800 h-16"></td><td className="border-2 border-slate-800 h-16"></td><td className="border-2 border-slate-800 h-16"></td><td className="border-2 border-slate-800 h-16"></td></tr></tbody></table></div>
-                                                <div className="mb-8"><h3 className="font-bold text-xl mb-4 border-l-8 border-blue-600 pl-3 text-slate-800 tracking-tighter">1. 상세 점검 내역</h3><table className="w-full text-[10px] border-collapse border-2 border-slate-800"><thead><tr className="bg-slate-200 border-b-2 border-slate-800 font-black"><th>일시</th><th>상태</th><th>등급</th><th>설비명</th><th>점검자</th><th className="w-20">암페어</th><th className="w-20">M/Seal</th><th className="w-48 text-center">조치 결과</th></tr></thead><tbody>{filteredRecords.map(r=><tr key={r.id} className="border-b hover:bg-slate-50 font-bold"><td className="border p-2 text-center font-medium whitespace-nowrap tracking-tighter">{String(r.date).replace('T',' ')}</td><td className="border p-2 text-center font-bold text-blue-600">{r.runStatus}</td><td className="border p-2 text-center font-bold">{r.eqClass}</td><td className="border p-2 font-bold text-slate-700">[{r.equipmentId}] {r.equipmentName}</td><td className="border p-2 text-center font-bold">{r.inspector}</td><td className="border p-2 text-center font-bold text-blue-700">{r.extra?.amphere||'-'}</td><td className="border p-2 text-center font-bold">{r.extra?.mSeal||'-'}</td><td className="border p-2 text-[9px] leading-normal font-medium text-slate-600 italic">"{r.remarks || '특이사항 없음'}"</td></tr>)}</tbody></table></div>
+                                                <div className="flex justify-between items-start mb-8 border-b-4 border-slate-900 pb-6">
+                                                    <div>
+                                                        {/* 💡 [해결 2] 종합 보고서 명칭 변경 */}
+                                                        <h1 className="text-2xl font-black text-slate-900 mb-4 tracking-tighter uppercase font-black tracking-tight underline decoration-blue-500">금호피앤비화학 PM 점검 종합 보고서</h1>
+                                                        <table className="text-[10px] text-left"><tbody><tr><th className="border p-2.5 bg-slate-50 w-24 font-bold">조회 등급</th><td className="border p-2.5 font-bold text-blue-800 w-48">{historyEqClass}급 설비</td></tr><tr><th className="border p-2.5 bg-slate-50 font-bold">점검 대상</th><td className="border p-2.5 font-bold text-slate-800">{historyEqId ? `[${historyEqId}] ${equipments.find(e=>e.id===historyEqId)?.name}` : '그룹 내 전체 설비'}</td></tr><tr><th className="border p-2.5 bg-slate-50 font-bold">출력 일자</th><td className="border p-2.5 font-medium">{new Date().toLocaleDateString('ko-KR')}</td></tr></tbody></table></div><table className="text-xs text-center border-collapse mt-4 shadow-sm"><tbody><tr><th rowSpan="2" className="border-2 border-slate-800 p-3 bg-slate-100 text-sm font-black">결<br/>재</th><th className="border-2 border-slate-800 p-1.5 w-20 bg-slate-50 font-bold text-[10px]">담당</th><th className="border-2 border-slate-800 p-1.5 w-20 bg-slate-50 font-bold text-[10px]">검토</th><th className="border-2 border-slate-800 p-1.5 w-20 bg-slate-50 font-bold text-[10px]">확인</th><th className="border-2 border-slate-600 p-1.5 w-20 bg-slate-50 font-bold text-[10px]">승인</th></tr><tr><td className="border-2 border-slate-800 h-16"></td><td className="border-2 border-slate-800 h-16"></td><td className="border-2 border-slate-800 h-16"></td><td className="border-2 border-slate-800 h-16"></td></tr></tbody></table>
+                                                </div>
+                                                <div className="mb-8"><h3 className="font-bold text-xl mb-4 border-l-8 border-blue-600 pl-3 text-slate-800 tracking-tighter">1. 상세 점검 내역</h3><table className="w-full text-[10px] border-collapse border-2 border-slate-800"><thead><tr className="bg-slate-200 border-b-2 border-slate-800 font-black"><th>일시</th><th>상태</th><th>등급</th><th>설비명</th><th>점검자</th><th className="w-20">암페어</th><th className="w-20">M/Seal</th><th className="w-48 text-center">조치 결과</th></tr></thead><tbody>{filteredRecords.map(r=><tr key={r.id} className="border-b hover:bg-slate-50 font-bold"><td className="border p-2 text-center font-medium whitespace-nowrap tracking-tighter">{String(r.date).replace('T',' ')}</td><td className="border p-2 text-center font-bold text-blue-600">{r.runStatus}</td><td className="border p-2 text-center font-bold">{r.eqClass}</td><td className="border p-2 font-bold text-slate-700">[{r.equipmentId}] {r.equipmentName}</td><td className="border p-2 text-center font-bold">{r.inspector}</td><td className="border p-2 text-center font-bold text-blue-700">{r.extra?.amphere||'-'}</td><td className="border p-2 text-center font-bold">{r.extra?.mSeal||'-'}</td><td className="border p-2 text-[9px] leading-normal font-medium text-slate-600 italic font-medium">"{r.remarks || '특이사항 없음'}"</td></tr>)}</tbody></table></div>
                                             </div>
                                         </div>
                                     </div>
