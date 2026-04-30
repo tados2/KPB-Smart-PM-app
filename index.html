@@ -22,7 +22,11 @@ const fallbackConfig = {
   measurementId: "G-VM7ENYM6EP"
 };
 
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : fallbackConfig;
+let firebaseConfig = fallbackConfig;
+try {
+  firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : fallbackConfig;
+} catch(e) {}
+
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
@@ -399,37 +403,43 @@ export default function App() {
   // 2. 데이터 연동: 사용자 인증이 완료된 후에만 DB 접근 (권한 에러 방지)
   useEffect(() => {
     if (!user) return;
-
+    
+    setIsFirebaseLoading(true);
     let unsubEq; 
     let unsubRec;
 
-    const eqRef = collection(db, 'artifacts', appId, 'public', 'data', 'equipments');
-    unsubEq = onSnapshot(eqRef, (snapshot) => {
-      const eqData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      if (eqData.length === 0) {
-        INITIAL_EQUIPMENT_LIST.forEach(eq => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'equipments', eq.id), eq).catch(e => {
-            if (e.code === 'permission-denied') setPermissionError(true);
-        }));
-      } else { 
-        setEquipments(eqData); 
-      }
-      setIsFirebaseLoading(false);
-    }, (error) => {
-      console.error("설비 연동 에러:", error);
-      if (error.code === 'permission-denied') setPermissionError(true);
-      setIsFirebaseLoading(false);
-    });
+    try {
+      const eqRef = collection(db, 'artifacts', appId, 'public', 'data', 'equipments');
+      unsubEq = onSnapshot(eqRef, (snapshot) => {
+        const eqData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        if (eqData.length === 0) {
+          INITIAL_EQUIPMENT_LIST.forEach(eq => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'equipments', eq.id), eq).catch(e => {
+              if (e.code === 'permission-denied') setPermissionError(true);
+          }));
+        } else { 
+          setEquipments(eqData); 
+        }
+        setIsFirebaseLoading(false);
+      }, (error) => {
+        console.error("설비 연동 에러:", error);
+        if (error.code === 'permission-denied') setPermissionError(true);
+        setIsFirebaseLoading(false);
+      });
 
-    const recRef = collection(db, 'artifacts', appId, 'public', 'data', 'records');
-    unsubRec = onSnapshot(recRef, (snapshot) => {
-      const recData = snapshot.docs.map(doc => doc.data());
-      setRecords(recData); 
+      const recRef = collection(db, 'artifacts', appId, 'public', 'data', 'records');
+      unsubRec = onSnapshot(recRef, (snapshot) => {
+        const recData = snapshot.docs.map(doc => doc.data());
+        setRecords(recData); 
+        setIsFirebaseLoading(false);
+      }, (error) => { 
+        console.error("기록 연동 에러:", error); 
+        if (error.code === 'permission-denied') setPermissionError(true);
+        setIsFirebaseLoading(false); 
+      });
+    } catch (error) {
+      console.error("Firestore 초기화 오류:", error);
       setIsFirebaseLoading(false);
-    }, (error) => { 
-      console.error("기록 연동 에러:", error); 
-      if (error.code === 'permission-denied') setPermissionError(true);
-      setIsFirebaseLoading(false); 
-    });
+    }
 
     return () => { 
         if(unsubEq) unsubEq(); 
