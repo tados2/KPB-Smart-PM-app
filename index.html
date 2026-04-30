@@ -27,9 +27,8 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// DB 저장 경로 설정 (특수문자를 안전하게 치환)
-const rawAppId = typeof __app_id !== 'undefined' ? String(__app_id) : 'smart-pm-system-app';
-const appId = rawAppId.replace(/[^a-zA-Z0-9_-]/g, '_');
+// DB 저장 경로 설정 (권한 에러 방지: 시스템 변수를 임의로 치환하지 않고 원본 그대로 사용)
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'smart-pm-system-app';
 
 // 샘플 설비 목록
 const INITIAL_EQUIPMENT_LIST = [
@@ -340,7 +339,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(''); 
   const [isFirebaseLoading, setIsFirebaseLoading] = useState(true);
   
-  // 💡 데이터베이스 권한 거부 에러를 UI로 명확하게 표시하기 위한 상태 추가
+  // 데이터베이스 권한 거부 에러를 UI로 명확하게 표시하기 위한 상태
   const [permissionError, setPermissionError] = useState(false);
 
   const [equipments, setEquipments] = useState([]);
@@ -370,9 +369,8 @@ export default function App() {
     setTimeout(() => setToast(prev => ({ ...prev, show: false })), 3000);
   };
 
+  // 1. 인증 초기화: 캔버스 환경과 사용자 환경을 안전하게 분리
   useEffect(() => {
-    let unsubscribeAuth; let unsubEq; let unsubRec;
-
     const initAuth = async () => {
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -388,51 +386,56 @@ export default function App() {
 
     initAuth();
     
-    unsubscribeAuth = onAuthStateChanged(auth, (authUser) => {
+    const unsubscribeAuth = onAuthStateChanged(auth, (authUser) => {
       setUser(authUser);
       if (!authUser) {
         setIsFirebaseLoading(false);
-      } else {
-        // 권한 확인 및 데이터 연동
-        const eqRef = collection(db, 'artifacts', appId, 'public', 'data', 'equipments');
-        unsubEq = onSnapshot(eqRef, (snapshot) => {
-          const eqData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-          if (eqData.length === 0) {
-            INITIAL_EQUIPMENT_LIST.forEach(eq => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'equipments', eq.id), eq).catch(e => {
-                if (e.code === 'permission-denied') setPermissionError(true);
-            }));
-          } else { 
-            setEquipments(eqData); 
-          }
-        }, (error) => {
-          console.error("설비 연동 에러:", error);
-          if (error.code === 'permission-denied') {
-            setPermissionError(true); // 에러 발생 시 UI를 에러 화면으로 변경
-          }
-          setIsFirebaseLoading(false);
-        });
-
-        const recRef = collection(db, 'artifacts', appId, 'public', 'data', 'records');
-        unsubRec = onSnapshot(recRef, (snapshot) => {
-          const recData = snapshot.docs.map(doc => doc.data());
-          setRecords(recData); 
-          setIsFirebaseLoading(false);
-        }, (error) => { 
-          console.error("기록 연동 에러:", error); 
-          if (error.code === 'permission-denied') {
-            setPermissionError(true);
-          }
-          setIsFirebaseLoading(false); 
-        });
       }
     });
     
+    return () => unsubscribeAuth();
+  }, []);
+
+  // 2. 데이터 연동: 사용자 인증이 완료된 후에만 DB 접근 (권한 에러 방지)
+  useEffect(() => {
+    if (!user) return;
+
+    let unsubEq; 
+    let unsubRec;
+
+    const eqRef = collection(db, 'artifacts', appId, 'public', 'data', 'equipments');
+    unsubEq = onSnapshot(eqRef, (snapshot) => {
+      const eqData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      if (eqData.length === 0) {
+        INITIAL_EQUIPMENT_LIST.forEach(eq => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'equipments', eq.id), eq).catch(e => {
+            if (e.code === 'permission-denied') setPermissionError(true);
+        }));
+      } else { 
+        setEquipments(eqData); 
+      }
+      setIsFirebaseLoading(false);
+    }, (error) => {
+      console.error("설비 연동 에러:", error);
+      if (error.code === 'permission-denied') setPermissionError(true);
+      setIsFirebaseLoading(false);
+    });
+
+    const recRef = collection(db, 'artifacts', appId, 'public', 'data', 'records');
+    unsubRec = onSnapshot(recRef, (snapshot) => {
+      const recData = snapshot.docs.map(doc => doc.data());
+      setRecords(recData); 
+      setIsFirebaseLoading(false);
+    }, (error) => { 
+      console.error("기록 연동 에러:", error); 
+      if (error.code === 'permission-denied') setPermissionError(true);
+      setIsFirebaseLoading(false); 
+    });
+
     return () => { 
-        if(unsubscribeAuth) unsubscribeAuth(); 
         if(unsubEq) unsubEq(); 
         if(unsubRec) unsubRec(); 
     };
-  }, []);
+  }, [user]);
 
   const getInitialFormState = () => ({
     equipmentId: '', date: getCurrentDateTimeLocal(),
