@@ -12,8 +12,8 @@ import {
 // ==========================================
 // 🔑 [사용자님의 파이어베이스 고유 설정값 강제 적용]
 // ==========================================
-// 시스템 임시 환경 변수를 무시하고, 오직 사용자님의 실제 DB로만 완벽하게 직결합니다.
-const firebaseConfig = {
+// 시스템 임시 환경 변수(Canvas)와 외부 배포(Vercel) 환경을 모두 완벽하게 지원합니다.
+const fallbackConfig = {
   apiKey: "AIzaSyCzTEKN9djNzuXwFUCrjfhfMXi5By25lwE",
   authDomain: "smart-pm-system.firebaseapp.com",
   projectId: "smart-pm-system",
@@ -23,12 +23,13 @@ const firebaseConfig = {
   measurementId: "G-VM7ENYM6EP"
 };
 
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : fallbackConfig;
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// DB 저장 경로 설정 (특수문자나 시스템 경로 변수로 인해 세그먼트가 꼬이는 현상 원천 차단)
-const appId = "smart-pm-system-app";
+// DB 저장 경로 설정 (시스템 변수 원본을 그대로 사용하여 권한 에러를 완벽 차단합니다)
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'smart-pm-system-app';
 
 // 샘플 설비 목록
 const INITIAL_EQUIPMENT_LIST = [
@@ -367,57 +368,71 @@ export default function App() {
     setTimeout(() => setToast(prev => ({ ...prev, show: false })), 3000);
   };
 
-  // 타이머를 추가하여 혹시라도 DB 연결이 지연될 때 무한 로딩(하얀 화면) 방지
+  // 1. 인증 초기화: 미리보기 환경과 배포 환경의 인증을 안전하게 분리
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setIsFirebaseLoading(false);
-    }, 5000);
-    return () => clearTimeout(timer);
-  }, []);
-
-  // 사용자님의 파이어베이스로 직접 익명 로그인 연동
-  useEffect(() => {
-    let unsubscribeAuth; let unsubEq; let unsubRec;
-    const initFirebase = async () => {
+    const initAuth = async () => {
       try {
-        // 임시 토큰 우회 없이 사용자님의 DB에 순수하게 익명 로그인 시도
-        await signInAnonymously(auth);
-
-        unsubscribeAuth = onAuthStateChanged(auth, (authUser) => {
-          setUser(authUser);
-          if (authUser) {
-            const eqRef = collection(db, 'artifacts', appId, 'public', 'data', 'equipments');
-            unsubEq = onSnapshot(eqRef, (snapshot) => {
-              const eqData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-              if (eqData.length === 0) {
-                INITIAL_EQUIPMENT_LIST.forEach(eq => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'equipments', eq.id), eq));
-              } else { setEquipments(eqData); }
-            }, (error) => {
-              console.error("설비 연동 에러:", error);
-              if(error.code === 'permission-denied') showMessage("파이어베이스 규칙 설정이 필요합니다.", "error");
-            });
-
-            const recRef = collection(db, 'artifacts', appId, 'public', 'data', 'records');
-            unsubRec = onSnapshot(recRef, (snapshot) => {
-              const recData = snapshot.docs.map(doc => doc.data());
-              setRecords(recData); setIsFirebaseLoading(false);
-            }, (error) => { console.error("기록 연동 에러:", error); setIsFirebaseLoading(false); });
-          } else {
-             setIsFirebaseLoading(false);
-          }
-        });
-      } catch (err) { 
-        console.error("인증 에러:", err); 
-        if (err.code === 'auth/operation-not-allowed') {
-            showMessage("파이어베이스에서 '익명 로그인'을 켜주세요.", "error");
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
         }
-        setIsFirebaseLoading(false); 
+      } catch (err) {
+        console.error("인증 에러:", err);
+        setIsFirebaseLoading(false);
       }
     };
 
-    initFirebase();
-    return () => { if (unsubscribeAuth) unsubscribeAuth(); if (unsubEq) unsubEq(); if (unsubRec) unsubRec(); };
+    initAuth();
+    
+    const unsubscribe = onAuthStateChanged(auth, (authUser) => {
+      setUser(authUser);
+      if (!authUser) setIsFirebaseLoading(false);
+    });
+    
+    return () => unsubscribe();
   }, []);
+
+  // 2. 데이터 연동: 사용자 인증이 완료된 후에만 DB 접근 시도 (권한 거부 방지)
+  useEffect(() => {
+    if (!user) return;
+
+    let unsubEq; 
+    let unsubRec;
+
+    try {
+      const eqRef = collection(db, 'artifacts', appId, 'public', 'data', 'equipments');
+      unsubEq = onSnapshot(eqRef, (snapshot) => {
+        const eqData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        if (eqData.length === 0) {
+          INITIAL_EQUIPMENT_LIST.forEach(eq => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'equipments', eq.id), eq));
+        } else { 
+          setEquipments(eqData); 
+        }
+      }, (error) => {
+        console.error("설비 연동 에러:", error);
+        if(error.code === 'permission-denied') showMessage("데이터베이스 접근 권한이 없습니다.", "error");
+      });
+
+      const recRef = collection(db, 'artifacts', appId, 'public', 'data', 'records');
+      unsubRec = onSnapshot(recRef, (snapshot) => {
+        const recData = snapshot.docs.map(doc => doc.data());
+        setRecords(recData); 
+        setIsFirebaseLoading(false);
+      }, (error) => { 
+        console.error("기록 연동 에러:", error); 
+        setIsFirebaseLoading(false); 
+      });
+    } catch (err) { 
+      console.error("데이터베이스 초기화 에러:", err); 
+      setIsFirebaseLoading(false); 
+    }
+
+    return () => { 
+      if (unsubEq) unsubEq(); 
+      if (unsubRec) unsubRec(); 
+    };
+  }, [user]);
 
   const getInitialFormState = () => ({
     equipmentId: '', date: getCurrentDateTimeLocal(),
@@ -448,7 +463,7 @@ export default function App() {
 
   const handleSave = async () => {
     if (!formData.equipmentId) { showMessage('점검할 설비를 먼저 선택해주세요.', 'error'); return; }
-    if (!auth.currentUser) { showMessage('데이터베이스에 연결되지 않았습니다.', 'error'); return; }
+    if (!user) { showMessage('데이터베이스에 연결되지 않았습니다.', 'error'); return; }
 
     const eqInfo = equipments.find(e => e.id === formData.equipmentId);
     const recordId = editingId || Date.now().toString() + Math.random().toString(36).substr(2, 5);
