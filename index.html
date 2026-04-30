@@ -1,18 +1,17 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
 import { 
   ClipboardCheck, History, Thermometer, Activity, Volume2, Flame, Droplet, 
   Save, User, Wrench, CheckCircle2, AlertTriangle, CheckSquare, Square, 
   Settings, LogOut, Plus, Trash2, Clock, Edit2, Upload, Download, Camera, 
-  X, Calendar, Search, FileSpreadsheet, Loader2
+  X, Calendar, Search, FileSpreadsheet, Loader2, ShieldAlert
 } from 'lucide-react';
 
 // ==========================================
-// 🔑 [사용자님의 파이어베이스 고유 설정값 강제 적용]
+// 🔑 [사용자님의 파이어베이스 고유 설정값]
 // ==========================================
-// 시스템 임시 환경 변수(Canvas)와 외부 배포(Vercel) 환경을 모두 완벽하게 지원합니다.
 const fallbackConfig = {
   apiKey: "AIzaSyCzTEKN9djNzuXwFUCrjfhfMXi5By25lwE",
   authDomain: "smart-pm-system.firebaseapp.com",
@@ -28,8 +27,9 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// DB 저장 경로 설정 (시스템 변수 원본을 그대로 사용하여 권한 에러를 완벽 차단합니다)
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'smart-pm-system-app';
+// DB 저장 경로 설정 (특수문자를 안전하게 치환)
+const rawAppId = typeof __app_id !== 'undefined' ? String(__app_id) : 'smart-pm-system-app';
+const appId = rawAppId.replace(/[^a-zA-Z0-9_-]/g, '_');
 
 // 샘플 설비 목록
 const INITIAL_EQUIPMENT_LIST = [
@@ -148,14 +148,13 @@ const LoginScreen = ({ onLogin }) => {
         </div>
         <h1 className="text-2xl font-bold text-center text-slate-800 mb-2">스마트 P.M 시스템</h1>
         <p className="text-center text-sm text-slate-500 mb-6">현장 점검자 이름을 입력해주세요.</p>
-        <input type="text" placeholder="이름 (예: 홍길동 반장)" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl mb-4 focus:ring-2 focus:ring-blue-500 font-medium text-center" value={name} onChange={e => setName(e.target.value)} onKeyDown={e => e.key === 'Enter' && name.trim() && onLogin(name.trim())} />
+        <input type="text" placeholder="이름 (예: 홍길동)" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl mb-4 focus:ring-2 focus:ring-blue-500 font-medium text-center" value={name} onChange={e => setName(e.target.value)} onKeyDown={e => e.key === 'Enter' && name.trim() && onLogin(name.trim())} />
         <button onClick={() => name.trim() && onLogin(name.trim())} className="w-full bg-blue-700 hover:bg-blue-800 text-white font-bold py-3.5 rounded-xl transition-colors shadow-md active:scale-95">클라우드 접속하기</button>
       </div>
     </div>
   );
 };
 
-// 💡 어제 버전 완벽 복구 1. 체크박스로 원하는 항목 선택하고 수치 기입
 const CategorySection = ({ title, icon: Icon, items, type, data, onChange, unit }) => {
   return (
     <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 mb-6">
@@ -220,7 +219,6 @@ const CategorySection = ({ title, icon: Icon, items, type, data, onChange, unit 
   );
 };
 
-// 💡 어제 버전 완벽 복구 2. 오일 점검도 누르기 쉬운 버튼식 + 변색 유무 포함
 const OilSection = ({ data, onChange }) => {
   const update = (field, value) => onChange({ ...data, [field]: value });
   
@@ -341,6 +339,10 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [currentUser, setCurrentUser] = useState(''); 
   const [isFirebaseLoading, setIsFirebaseLoading] = useState(true);
+  
+  // 💡 데이터베이스 권한 거부 에러를 UI로 명확하게 표시하기 위한 상태 추가
+  const [permissionError, setPermissionError] = useState(false);
+
   const [equipments, setEquipments] = useState([]);
   const [records, setRecords] = useState([]);
   const [activeTab, setActiveTab] = useState('form');
@@ -368,8 +370,9 @@ export default function App() {
     setTimeout(() => setToast(prev => ({ ...prev, show: false })), 3000);
   };
 
-  // 1. 인증 초기화: 미리보기 환경과 배포 환경의 인증을 안전하게 분리
   useEffect(() => {
+    let unsubscribeAuth; let unsubEq; let unsubRec;
+
     const initAuth = async () => {
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -378,61 +381,58 @@ export default function App() {
           await signInAnonymously(auth);
         }
       } catch (err) {
-        console.error("인증 에러:", err);
+        console.error("인증 처리 실패:", err);
         setIsFirebaseLoading(false);
       }
     };
 
     initAuth();
     
-    const unsubscribe = onAuthStateChanged(auth, (authUser) => {
+    unsubscribeAuth = onAuthStateChanged(auth, (authUser) => {
       setUser(authUser);
-      if (!authUser) setIsFirebaseLoading(false);
+      if (!authUser) {
+        setIsFirebaseLoading(false);
+      } else {
+        // 권한 확인 및 데이터 연동
+        const eqRef = collection(db, 'artifacts', appId, 'public', 'data', 'equipments');
+        unsubEq = onSnapshot(eqRef, (snapshot) => {
+          const eqData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          if (eqData.length === 0) {
+            INITIAL_EQUIPMENT_LIST.forEach(eq => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'equipments', eq.id), eq).catch(e => {
+                if (e.code === 'permission-denied') setPermissionError(true);
+            }));
+          } else { 
+            setEquipments(eqData); 
+          }
+        }, (error) => {
+          console.error("설비 연동 에러:", error);
+          if (error.code === 'permission-denied') {
+            setPermissionError(true); // 에러 발생 시 UI를 에러 화면으로 변경
+          }
+          setIsFirebaseLoading(false);
+        });
+
+        const recRef = collection(db, 'artifacts', appId, 'public', 'data', 'records');
+        unsubRec = onSnapshot(recRef, (snapshot) => {
+          const recData = snapshot.docs.map(doc => doc.data());
+          setRecords(recData); 
+          setIsFirebaseLoading(false);
+        }, (error) => { 
+          console.error("기록 연동 에러:", error); 
+          if (error.code === 'permission-denied') {
+            setPermissionError(true);
+          }
+          setIsFirebaseLoading(false); 
+        });
+      }
     });
     
-    return () => unsubscribe();
-  }, []);
-
-  // 2. 데이터 연동: 사용자 인증이 완료된 후에만 DB 접근 시도 (권한 거부 방지)
-  useEffect(() => {
-    if (!user) return;
-
-    let unsubEq; 
-    let unsubRec;
-
-    try {
-      const eqRef = collection(db, 'artifacts', appId, 'public', 'data', 'equipments');
-      unsubEq = onSnapshot(eqRef, (snapshot) => {
-        const eqData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        if (eqData.length === 0) {
-          INITIAL_EQUIPMENT_LIST.forEach(eq => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'equipments', eq.id), eq));
-        } else { 
-          setEquipments(eqData); 
-        }
-      }, (error) => {
-        console.error("설비 연동 에러:", error);
-        if(error.code === 'permission-denied') showMessage("데이터베이스 접근 권한이 없습니다.", "error");
-      });
-
-      const recRef = collection(db, 'artifacts', appId, 'public', 'data', 'records');
-      unsubRec = onSnapshot(recRef, (snapshot) => {
-        const recData = snapshot.docs.map(doc => doc.data());
-        setRecords(recData); 
-        setIsFirebaseLoading(false);
-      }, (error) => { 
-        console.error("기록 연동 에러:", error); 
-        setIsFirebaseLoading(false); 
-      });
-    } catch (err) { 
-      console.error("데이터베이스 초기화 에러:", err); 
-      setIsFirebaseLoading(false); 
-    }
-
     return () => { 
-      if (unsubEq) unsubEq(); 
-      if (unsubRec) unsubRec(); 
+        if(unsubscribeAuth) unsubscribeAuth(); 
+        if(unsubEq) unsubEq(); 
+        if(unsubRec) unsubRec(); 
     };
-  }, [user]);
+  }, []);
 
   const getInitialFormState = () => ({
     equipmentId: '', date: getCurrentDateTimeLocal(),
@@ -479,7 +479,11 @@ export default function App() {
       setEditingId(null); setHistoryEqClass('전체'); setHistoryEqId(recordData.equipmentId);
       setFormData(getInitialFormState()); showMessage(editingId ? '수정 사항이 저장되었습니다!' : '점검 결과가 클라우드에 저장되었습니다!');
       setActiveTab('history');
-    } catch (err) { showMessage('저장 중 권한 오류가 발생했습니다.', 'error'); console.error(err); }
+    } catch (err) { 
+        showMessage('저장 중 권한 오류가 발생했습니다.', 'error'); 
+        console.error(err); 
+        if (err.code === 'permission-denied') setPermissionError(true);
+    }
   };
 
   const handleEdit = (record) => {
@@ -513,7 +517,10 @@ export default function App() {
     try {
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'equipments', trimmedId), { id: trimmedId, name: trimmedName, eqClass: newEqClass });
       setNewEqId(''); setNewEqName(''); showMessage('새 설비가 클라우드에 추가되었습니다.');
-    } catch (err) { showMessage('설비 등록 중 권한 오류.', 'error'); }
+    } catch (err) { 
+        showMessage('설비 등록 중 권한 오류.', 'error'); 
+        if (err.code === 'permission-denied') setPermissionError(true);
+    }
   };
 
   const handleDeleteEquipmentClick = (id) => { setDeleteModalState({ isOpen: true, eqId: id, password: '', error: '' }); };
@@ -525,7 +532,9 @@ export default function App() {
         if(formData.equipmentId === deleteModalState.eqId) handleInputChange('equipmentId', '');
         if(historyEqId === deleteModalState.eqId) setHistoryEqId('');
         setDeleteModalState({ isOpen: false, eqId: null, password: '', error: '' }); showMessage('설비가 정상적으로 삭제되었습니다.');
-      } catch (err) { setDeleteModalState(prev => ({ ...prev, error: '삭제 중 권한 오류 발생' })); }
+      } catch (err) { 
+        setDeleteModalState(prev => ({ ...prev, error: '삭제 중 권한 오류 발생' })); 
+      }
     } else { setDeleteModalState(prev => ({ ...prev, error: '비밀번호가 일치하지 않습니다.' })); }
   };
 
@@ -633,6 +642,39 @@ export default function App() {
     return <div className="flex flex-col gap-1.5 py-1">{keys.map(k => { const status = String(data[k]); let color = "text-slate-700 font-bold"; if (status === '정상') color = "text-emerald-700 font-bold"; if (status === '주의') color = "text-amber-600 font-bold"; if (status === '이상') color = "text-rose-600 font-bold"; return <div key={k} className="flex justify-between border-b border-slate-100 last:border-0 pb-1 leading-normal"><span className="text-slate-500 font-bold mr-1">{k}:</span><strong className={`whitespace-nowrap ${color}`}>{status}</strong></div>})}</div>;
   }
 
+  // 💡 [필독] 권한 거부 에러 시 사용자에게 안내하는 특수 화면
+  if (permissionError) {
+    return (
+      <div className="min-h-screen bg-slate-100 flex flex-col items-center justify-center p-4">
+        <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border border-slate-200 text-center animate-in fade-in slide-in-from-bottom-4">
+          <ShieldAlert className="w-16 h-16 text-rose-500 mx-auto mb-4" />
+          <h1 className="text-xl font-bold text-slate-800 mb-4">파이어베이스 권한 설정 필요</h1>
+          <p className="text-sm text-slate-600 mb-6 text-left leading-relaxed">
+            현재 파이어베이스 서버의 <b>보안 규칙(Rules)이 잠겨 있어서</b> 데이터를 불러오거나 저장할 수 없습니다. 에러를 해결하려면 아래의 설정을 진행해 주세요.<br/><br/>
+            <b>[해결 방법 2가지]</b><br/>
+            1. 파이어베이스의 <b>Authentication(인증)</b> 메뉴에서 <b>'익명(Anonymous)'</b> 로그인을 활성화합니다.<br/>
+            2. 파이어베이스의 <b>Firestore Database</b> 메뉴 ➔ <b>Rules(규칙)</b> 탭에 들어가서 기존 내용을 지우고 아래의 코드를 붙여넣은 뒤 <b>게시(Publish)</b> 버튼을 누릅니다.
+          </p>
+          <div className="bg-slate-800 rounded-lg p-4 text-left overflow-auto shadow-inner border border-slate-700">
+            <pre className="text-emerald-400 text-xs font-mono">
+{`rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}`}
+            </pre>
+          </div>
+          <button onClick={() => window.location.reload()} className="mt-6 w-full bg-blue-700 hover:bg-blue-800 text-white font-bold py-3.5 rounded-xl transition-colors shadow-md">
+            설정 완료 후 다시 시도하기
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (!currentUser) return <LoginScreen onLogin={setCurrentUser} />;
   
   if (isFirebaseLoading) {
@@ -667,12 +709,10 @@ export default function App() {
               </div>
             </div>
 
-            {/* 체크박스 선택 + 수치 입력 폼 복구 */}
             <CategorySection title="진동 점검 (수치입력)" icon={Activity} type="numeric" unit="mm/s" items={['Motor', 'Gearbox', '본체', 'Oil Pump']} data={formData.vibration} onChange={d => handleInputChange('vibration', d)} />
             <CategorySection title="이음 점검 (상태선택)" icon={Volume2} type="status" items={['Motor', 'Gearbox', '본체', 'Bearing', 'Oil Pump']} data={formData.noise} onChange={d => handleInputChange('noise', d)} />
             <CategorySection title="발열 점검 (온도입력)" icon={Flame} type="numeric" unit="°C" items={['Motor', 'Gearbox', '본체', 'Bearing', 'Oil Pump']} data={formData.heating} onChange={d => handleInputChange('heating', d)} />
             
-            {/* 오일 점검 - 직관적 버튼식 복구 */}
             <OilSection data={formData.oil} onChange={d => handleInputChange('oil', d)} />
 
             <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 mb-6">
