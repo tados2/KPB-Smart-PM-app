@@ -31,30 +31,55 @@
         body { font-family: 'Pretendard', sans-serif; -webkit-tap-highlight-color: transparent; }
         .hide-scrollbar::-webkit-scrollbar { display: none; }
         input[type="number"]::-webkit-inner-spin-button { display: none; }
-        .active-scale:active { transform: scale(0.97); transition: transform 0.1s; }
+        button:active { transform: scale(0.98); }
+        .unit-input { padding-right: 4.5rem !important; }
+        @media print { .no-print { display: none; } }
+        
+        .red-circle {
+            width: 10px;
+            height: 10px;
+            background-color: #ef4444;
+            border-radius: 50%;
+            display: inline-block;
+            box-shadow: 0 0 8px #ef4444;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
     </style>
 </head>
-<body class="bg-slate-100 min-h-screen">
+<body class="bg-slate-100 min-h-screen text-slate-900">
     <div id="root"></div>
 
     <script type="text/babel" data-type="module">
-        import React, { useState, useEffect, useMemo } from 'react';
+        import React, { useState, useEffect, useMemo, useCallback } from 'react';
         import { createRoot } from 'react-dom/client';
         import { 
             ClipboardCheck, History, Activity, Volume2, Flame, Droplet, 
             Save, User, Wrench, CheckCircle2, AlertTriangle, CheckSquare, Square, 
             Settings, LogOut, Plus, Trash2, Clock, Edit2, Upload, Download, Camera, 
-            X, Calendar, Search, FileSpreadsheet, Loader2, ShieldAlert, ChevronRight
+            X, Calendar, Search, FileSpreadsheet, Loader2, ShieldAlert, ChevronRight, FileText,
+            Zap, ShieldCheck, Power, CircleDot, Check, TrendingUp
         } from 'lucide-react';
 
-        // Firebase 라이브러리
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
         import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
 
-        // ==========================================
-        // 🔑 [사용자님의 파이어베이스 고유 설정값]
-        // ==========================================
+        // --- 1. 글로벌 상수 및 초기 설정 ---
+        const ALL_PARTS = ['Motor', 'Gearbox', '본체', 'Oil Pump', 'Bearing'];
+        const OIL_FIELDS = ['level', 'discoloration', 'leak'];
+        const EXTRA_FIELDS = ['amphere', 'mSeal'];
+
+        const INITIAL_EQUIPMENT_LIST = [
+            { id: 'P-101A', name: 'Feed Pump A', eqClass: 'A', defaultParts: ['Motor', 'Gearbox', '본체'], oilParts: ['level', 'leak'], extraParts: ['amphere', 'mSeal'] },
+            { id: 'P-101B', name: 'Feed Pump B', eqClass: 'A', defaultParts: ['Motor', 'Gearbox', '본체'], oilParts: ['level', 'leak'], extraParts: ['amphere', 'mSeal'] },
+            { id: 'C-201', name: 'Main Compressor', eqClass: 'B', defaultParts: ['Motor', 'Gearbox', '본체', 'Oil Pump'], oilParts: ['level', 'discoloration', 'leak'], extraParts: ['amphere'] },
+        ];
+
         const firebaseConfig = {
             apiKey: "AIzaSyCzTEKN9djNzuXwFUCrjfhfMXi5By25lwE",
             authDomain: "smart-pm-system.firebaseapp.com",
@@ -68,190 +93,207 @@
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'smart-pm-system-app';
+        const rawAppId = typeof __app_id !== 'undefined' ? String(__app_id) : 'smart-pm-system-app';
+        const appId = rawAppId.replace(/\//g, '-');
 
-        // --- 구성 요소들 (App 컴포넌트 외부 정의로 안정성 확보) ---
+        // --- 2. 유틸리티 함수 ---
+        const getCurrentDateTimeLocal = () => {
+            const now = new Date();
+            const offset = now.getTimezoneOffset() * 60000;
+            return (new Date(now - offset)).toISOString().slice(0, 16);
+        };
+
+        const compressImage = (file) => {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.src = e.target.result;
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        const MAX_WIDTH = 800; 
+                        let width = img.width;
+                        let height = img.height;
+                        if (width > MAX_WIDTH) { height = height * (MAX_WIDTH / width); width = MAX_WIDTH; }
+                        canvas.width = width; canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+                        resolve(canvas.toDataURL('image/jpeg', 0.7)); 
+                    };
+                };
+            });
+        };
+
+        // --- 3. 하위 컴포넌트 ---
 
         const LoginScreen = ({ onLogin }) => {
             const [name, setName] = useState('');
             return (
                 <div className="min-h-screen flex items-center justify-center bg-slate-100 p-4">
-                    <div className="bg-white p-8 rounded-3xl shadow-xl w-full max-w-sm border border-slate-200">
-                        <div className="flex justify-center mb-6">
-                            <div className="bg-blue-600 p-4 rounded-2xl shadow-lg shadow-blue-200">
-                                <Wrench className="w-8 h-8 text-white" />
-                            </div>
-                        </div>
-                        <h1 className="text-2xl font-bold text-center text-slate-800 mb-2 tracking-tight">스마트 P.M 시스템</h1>
-                        <p className="text-center text-sm text-slate-400 mb-8">성함을 입력하고 점검을 시작하세요.</p>
-                        <div className="space-y-4">
-                            <input 
-                                type="text" 
-                                placeholder="점검자 성함" 
-                                className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-center font-semibold text-slate-700 transition-all" 
-                                value={name} 
-                                onChange={e => setName(e.target.value)} 
-                                onKeyDown={e => e.key === 'Enter' && name.trim() && onLogin(name.trim())} 
-                            />
-                            <button 
-                                onClick={() => name.trim() && onLogin(name.trim())} 
-                                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-2xl shadow-lg shadow-blue-100 transition-all active:scale-95 flex items-center justify-center gap-2"
-                            >
-                                점검 시작하기 <ChevronRight className="w-5 h-5" />
-                            </button>
-                        </div>
+                    <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-sm border border-slate-200 text-center">
+                        <div className="flex justify-center mb-6"><div className="bg-blue-100 p-3 rounded-full"><Wrench className="w-8 h-8 text-blue-700" /></div></div>
+                        <h1 className="text-2xl font-bold text-center text-slate-800 mb-2 tracking-tight font-black">PM SMART</h1>
+                        <p className="text-center text-sm text-slate-500 mb-8 font-medium">현장 점검자 성함을 입력해 주세요.</p>
+                        <input type="text" placeholder="이름 (예: 홍길동)" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl mb-4 focus:ring-2 focus:ring-blue-500 font-bold outline-none text-center" value={name} onChange={e => setName(e.target.value)} onKeyDown={e => e.key === 'Enter' && name.trim() && onLogin(name.trim())} />
+                        <button onClick={() => name.trim() && onLogin(name.trim())} className="w-full bg-blue-700 hover:bg-blue-800 text-white font-bold py-4 rounded-xl shadow-lg transition-all active:scale-95 font-black">클라우드 접속</button>
                     </div>
                 </div>
             );
         };
 
-        const CategorySection = ({ title, icon: Icon, items, type, data, onChange, unit }) => {
+        const CategorySection = ({ title, icon: Icon, items, data, onChange, unit, type }) => {
+            const activeItems = items.filter(item => data[item] !== undefined);
+            if (activeItems.length === 0) return null;
             return (
-                <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 mb-5 transition-all">
-                    <div className="flex items-center mb-5 pb-2 border-b border-slate-50">
-                        <div className="p-2 bg-slate-50 rounded-lg mr-3">
-                            <Icon className="w-5 h-5 text-blue-600" />
-                        </div>
-                        <span className="font-bold text-slate-800 text-lg tracking-tight">{title}</span>
+                <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 mb-6 transition-all">
+                    <div className="flex items-center mb-4 border-b border-slate-50 pb-2">
+                        <Icon className="w-5 h-5 text-slate-500 mr-2" />
+                        <span className="font-bold text-slate-800 font-black">{title}</span>
                     </div>
                     <div className="space-y-3">
-                        {items.map(item => {
-                            const isSelected = data[item] !== undefined;
-                            return (
-                                <div key={item} className={`flex flex-col sm:flex-row sm:items-center gap-3 p-3 rounded-xl border transition-all ${isSelected ? 'bg-blue-50/40 border-blue-200 ring-1 ring-blue-100' : 'bg-slate-50 border-slate-100'}`}>
-                                    <button 
-                                        className="flex items-center flex-1 text-left active:opacity-70 transition-opacity" 
-                                        onClick={() => {
-                                            const newData = { ...data };
-                                            if (isSelected) delete newData[item];
-                                            else newData[item] = type === 'numeric' ? '' : '정상';
-                                            onChange(newData);
-                                        }}
-                                    >
-                                        {isSelected ? <CheckSquare className="w-6 h-6 text-blue-600 mr-3 shrink-0"/> : <Square className="w-6 h-6 text-slate-300 mr-3 shrink-0"/>}
-                                        <span className={`font-bold ${isSelected ? 'text-blue-900' : 'text-slate-500'}`}>{item}</span>
-                                    </button>
-                                    
-                                    {isSelected && (
-                                        <div className="pl-9 sm:pl-0 flex-1 flex justify-end animate-in fade-in duration-300 slide-in-from-right-2">
-                                            {type === 'numeric' ? (
-                                                <div className="relative w-full sm:w-36">
-                                                    <input 
-                                                        type="number" 
-                                                        className="w-full p-2.5 text-sm border-2 border-blue-200 rounded-xl outline-none text-right pr-10 bg-white font-bold text-blue-800 focus:border-blue-500 transition-colors"
-                                                        placeholder="0.0" value={data[item]} onChange={(e) => onChange({ ...data, [item]: e.target.value })}
-                                                    />
-                                                    {unit && <span className="absolute right-3 top-2.5 text-xs text-blue-400 font-bold">{unit}</span>}
-                                                </div>
-                                            ) : (
-                                                <div className="flex w-full sm:w-auto bg-white rounded-xl border-2 border-blue-200 overflow-hidden shadow-sm">
-                                                    {['정상', '주의', '이상'].map(status => (
-                                                        <button 
-                                                            key={status} 
-                                                            onClick={() => onChange({ ...data, [item]: status })} 
-                                                            className={`flex-1 sm:px-4 py-2 text-xs font-bold transition-all ${data[item] === status ? (status === '정상' ? 'bg-emerald-500 text-white' : status === '주의' ? 'bg-amber-500 text-white' : 'bg-rose-500 text-white') : 'text-slate-400 hover:bg-slate-50'}`}
-                                                        >
-                                                            {status}
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                            )}
+                        {activeItems.map(item => (
+                            <div key={item} className="flex flex-col sm:flex-row sm:items-center gap-2 p-2.5 rounded-lg border border-blue-50 bg-blue-50/20">
+                                <div className="flex items-center flex-1 text-left"><CheckSquare className="w-5 h-5 text-blue-600 mr-2 shrink-0"/><span className="font-bold text-blue-900">{item}</span></div>
+                                <div className="flex justify-end flex-1">
+                                    {type === 'numeric' ? (
+                                        <div className="relative w-full sm:w-32">
+                                            <input type="number" className="unit-input w-full p-2 text-sm border border-blue-200 rounded focus:ring-2 focus:ring-blue-500 outline-none text-right bg-white shadow-sm font-bold text-blue-800" placeholder="0.0" value={data[item]} onChange={(e) => onChange({ ...data, [item]: e.target.value })} />
+                                            {unit && <span className="absolute right-2 top-2 text-[10px] text-slate-400 font-black pointer-events-none">{unit}</span>}
+                                        </div>
+                                    ) : (
+                                        <div className="flex w-full sm:w-auto bg-white rounded border border-blue-200 overflow-hidden shadow-sm">
+                                            {['정상', '주의', '이상'].map(status => {
+                                                const active = data[item] === status;
+                                                let color = active ? (status === '정상' ? 'bg-emerald-500 text-white font-bold' : status === '주의' ? 'bg-amber-500 text-white font-bold' : 'bg-rose-500 text-white font-bold') : "bg-slate-50 text-slate-400";
+                                                return <button key={status} onClick={() => onChange({ ...data, [item]: status })} className={`flex-1 sm:px-4 py-2 text-xs transition-colors ${color} border-r border-slate-100 last:border-0 font-bold`}>{status}</button>;
+                                            })}
                                         </div>
                                     )}
                                 </div>
-                            );
-                        })}
+                            </div>
+                        ))}
                     </div>
                 </div>
             );
         };
 
-        const OilSection = ({ data, onChange }) => {
+        const OilSection = ({ itemsToShow, data, onChange }) => {
             const update = (field, value) => onChange({ ...data, [field]: value });
-            const Row = ({ label, field, options }) => (
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3.5 bg-slate-50 rounded-xl border border-slate-100 gap-3">
-                    <span className="font-bold text-slate-700 text-sm pl-1">{label}</span>
-                    <div className="flex w-full sm:w-auto bg-white rounded-xl border-2 border-blue-200 overflow-hidden shadow-sm">
-                        {options.map((opt) => {
-                            const isActive = data[field] === opt;
-                            let colorClass = "text-slate-400 hover:bg-slate-50";
-                            if (isActive) {
-                                if (opt === '양호' || opt === '정상') colorClass = "bg-emerald-500 text-white font-bold";
-                                else if (opt === '보충' || opt === '주의' || opt === '변색') colorClass = "bg-amber-500 text-white font-bold";
-                                else colorClass = "bg-rose-500 text-white font-bold";
-                            }
-                            return (
-                                <button key={opt} onClick={() => update(field, opt)} className={`flex-1 sm:px-5 py-2.5 text-xs transition-all ${colorClass}`}>{opt}</button>
-                            );
-                        })}
-                    </div>
-                </div>
-            );
+            const labelMap = { level: '오일 레벨', discoloration: '변색 유무', leak: 'Leak (누유)' };
+            const optionsMap = { level: ['양호', '보충', '부족'], discoloration: ['정상', '변색'], leak: ['정상', '누유'] };
             return (
-                <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 mb-5">
-                    <div className="flex items-center mb-5 pb-2 border-b border-slate-50">
-                        <div className="p-2 bg-slate-50 rounded-lg mr-3"><Droplet className="w-5 h-5 text-blue-600" /></div>
-                        <span className="font-bold text-slate-800 text-lg tracking-tight">오일 상태 점검</span>
-                    </div>
+                <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 mb-6 transition-all hover:border-blue-100">
+                    <div className="flex items-center mb-4 border-b border-slate-50 pb-2"><Droplet className="w-5 h-5 text-slate-500 mr-2" /><span className="font-bold text-slate-800 font-black">오일 상태 점검</span></div>
                     <div className="space-y-3">
-                        <Row label="오일 레벨" field="level" options={['양호', '보충', '부족']} />
-                        <Row label="변색 유무" field="discoloration" options={['정상', '변색']} />
-                        <Row label="Leak (누유)" field="leak" options={['정상', '누유']} />
+                        {itemsToShow.map(field => (
+                            <div key={field} className="flex flex-col sm:flex-row sm:items-center justify-between p-2.5 bg-slate-50 rounded-lg border border-slate-100 gap-2">
+                                <span className="font-bold text-slate-700 text-sm pl-1">{labelMap[field]}</span>
+                                <div className="flex w-full sm:w-auto bg-white rounded border border-blue-200 overflow-hidden shadow-sm">
+                                    {optionsMap[field].map((opt) => (
+                                        <button key={opt} onClick={() => update(field, opt)} className={`flex-1 sm:px-5 py-2 text-xs transition-colors ${data[field] === opt ? (opt === '정상' || opt === '양호' ? 'bg-emerald-500 text-white font-bold' : 'bg-amber-500 text-white font-bold') : "bg-slate-50 text-slate-400"} border-r border-slate-100 last:border-0 font-bold`}>{opt}</button>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
                     </div>
                 </div>
             );
         };
 
-        const EquipmentSelector = ({ equipments, selectedId, onSelect, selectedClass, onClassChange }) => {
+        const ExtraSection = ({ itemsToShow, data, onChange }) => {
+            return (
+                <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 mb-6 transition-all hover:border-blue-100">
+                    <div className="flex items-center mb-4 border-b border-slate-50 pb-2"><Zap className="w-5 h-5 text-slate-500 mr-2" /><span className="font-bold text-slate-800 font-black">기타 중요 항목</span></div>
+                    <div className="space-y-3">
+                        {itemsToShow.includes('amphere') && (
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100 gap-2">
+                                <span className="font-bold text-slate-700 text-sm pl-1 uppercase tracking-tighter font-black">전류 (Amphere)</span>
+                                <div className="relative w-full sm:w-40"><input type="number" placeholder="0.0" className="unit-input w-full p-2.5 text-sm border border-blue-200 rounded-xl outline-none text-right bg-white font-bold text-blue-800 focus:ring-2 focus:ring-blue-500" value={data.amphere || ''} onChange={e => onChange({ ...data, amphere: e.target.value })} /><span className="absolute right-3 top-2.5 text-[10px] text-slate-400 font-black pointer-events-none">Amp</span></div>
+                            </div>
+                        )}
+                        {itemsToShow.includes('mSeal') && (
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100 gap-2">
+                                <span className="font-bold text-slate-700 text-sm pl-1 uppercase tracking-tighter font-black">M/Seal 상태</span>
+                                <div className="flex w-full sm:w-auto bg-white rounded border border-blue-200 overflow-hidden shadow-sm">{['양호', 'Leak'].map(st => (
+                                    <button key={st} onClick={() => onChange({ ...data, mSeal: st })} className={`flex-1 sm:px-6 py-2.5 text-xs transition-all ${data.mSeal === st ? (st === '양호' ? 'bg-emerald-500 text-white font-bold' : 'bg-rose-500 text-white font-bold') : "bg-slate-50 text-slate-400"} border-r border-slate-100 last:border-0 font-bold`}>{st}</button>
+                                ))}</div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        function EquipmentSelector({ equipments, records, selectedId, onSelect, selectedClass, onClassChange, checkOverdue }) {
             const [search, setSearch] = useState('');
-            const classes = ['전체', 'A', 'B', 'C', 'D'];
             const filtered = equipments.filter(eq => {
                 const matchClass = selectedClass === '전체' || eq.eqClass === selectedClass;
-                const matchSearch = String(eq.id).toLowerCase().includes(search.toLowerCase()) || 
-                                  String(eq.name).toLowerCase().includes(search.toLowerCase());
+                const matchSearch = String(eq.id || '').toLowerCase().includes(search.toLowerCase()) || String(eq.name || '').toLowerCase().includes(search.toLowerCase());
                 return matchClass && matchSearch;
-            }).slice(0, 30);
+            });
 
             if (selectedId) {
                 const eq = equipments.find(e => e.id === selectedId);
                 return (
-                    <div className="flex justify-between items-center bg-blue-600 p-4 rounded-2xl shadow-lg shadow-blue-100 animate-in zoom-in-95 duration-200">
-                        <div className="truncate pr-2">
-                            <div className="text-[10px] text-blue-200 font-bold mb-0.5">{eq?.eqClass}급 설비</div>
-                            <div className="flex items-center">
-                                <span className="font-black text-white mr-2">[{eq?.id}]</span>
-                                <span className="text-white font-medium truncate">{eq?.name}</span>
-                            </div>
-                        </div>
-                        <button onClick={() => onSelect('')} className="shrink-0 text-xs bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-xl font-bold backdrop-blur-sm border border-white/20 transition-all">설비 변경</button>
+                    <div className="flex justify-between items-center bg-blue-50 p-3 rounded-lg border border-blue-200 shadow-sm animate-in fade-in">
+                        <div className="truncate pr-2 flex items-center gap-2 font-bold"><span className="text-blue-800 font-black">[{eq?.id}]</span><span className="font-bold">{eq?.name}</span><span className="text-[9px] bg-blue-200 text-blue-800 px-1.5 py-0.5 rounded-full font-black">{eq?.eqClass}급</span></div>
+                        <button onClick={() => onSelect('')} className="shrink-0 text-xs bg-white border border-blue-300 text-blue-600 px-3 py-2 rounded hover:bg-blue-100 transition-colors font-black shadow-sm">설비 변경</button>
                     </div>
                 );
             }
 
             return (
-                <div className="bg-slate-50 p-4 rounded-2xl border-2 border-slate-200 flex flex-col gap-4">
-                    <div className="flex bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm p-1">
-                        {classes.map(c => (
-                            <button key={c} onClick={() => onClassChange(c)} className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${selectedClass === c ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>{c}</button>
+                <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 flex flex-col gap-3 animate-in fade-in">
+                    <div className="flex bg-white rounded-lg border border-slate-200 overflow-hidden shadow-sm p-0.5">
+                        {['전체', 'A', 'B', 'C', 'D'].map(c => (
+                            <button key={c} onClick={() => onClassChange(c)} className={`flex-1 py-2 text-xs font-black transition-all ${selectedClass === c ? 'bg-blue-600 text-white rounded-md shadow-sm' : 'text-slate-400 hover:bg-slate-50'}`}>{c === '전체' ? '전체' : `${c}급`}</button>
                         ))}
                     </div>
-                    <div className="relative">
-                        <Search className="w-4 h-4 absolute left-3 top-3.5 text-slate-400" />
-                        <input type="text" placeholder="설비명 또는 ID로 검색..." className="w-full pl-10 p-3 bg-white border border-slate-200 rounded-xl outline-none text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all" value={search} onChange={e => setSearch(e.target.value)} />
+                    <div className="relative shadow-sm"><Search className="w-4 h-4 absolute left-3 top-3 text-slate-400" /><input type="text" placeholder="설비 검색..." className="w-full pl-9 p-2.5 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-bold" value={search} onChange={e => setSearch(e.target.value)} /></div>
+                    <div className="max-h-56 overflow-y-auto border border-slate-200 rounded-lg bg-white shadow-inner divide-y divide-slate-100">
+                        {filtered.length > 0 ? filtered.map(eq => {
+                            const isOverdue = checkOverdue(eq);
+                            return (
+                                <button key={eq.id} onClick={() => onSelect(eq.id)} className="w-full text-left p-3 hover:bg-blue-50 transition-colors flex items-center justify-between group">
+                                    <div className="truncate pr-2 flex items-center gap-2"><span className="font-black text-slate-700 group-hover:text-blue-700">[{eq.id}]</span><span className="text-sm text-slate-600 font-bold group-hover:text-blue-800">{eq.name}</span>{isOverdue && <div className="red-circle" title="점검 요망"></div>}</div>
+                                    <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded font-black ${eq.eqClass === 'A' ? 'bg-rose-100 text-rose-700' : eq.eqClass === 'B' ? 'bg-amber-100 text-amber-700' : 'bg-slate-200 text-slate-600'}`}>{eq.eqClass}급</span>
+                                </button>
+                            );
+                        }) : <div className="p-4 text-center text-xs text-slate-400 font-medium">검색 결과가 없습니다.</div>}
                     </div>
-                    <div className="max-h-48 overflow-y-auto border border-slate-200 rounded-xl bg-white divide-y divide-slate-100 shadow-inner">
-                        {filtered.length > 0 ? filtered.map(eq => (
-                            <button key={eq.id} onClick={() => onSelect(eq.id)} className="w-full text-left p-3.5 hover:bg-blue-50 transition-colors flex justify-between items-center group">
-                                <div className="truncate"><span className="font-extrabold text-slate-700 group-hover:text-blue-700 mr-2 transition-colors">[{eq.id}]</span><span className="text-sm text-slate-500 group-hover:text-blue-600 transition-colors">{eq.name}</span></div>
-                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-black shadow-sm ${eq.eqClass === 'A' ? 'bg-rose-100 text-rose-600' : 'bg-slate-100 text-slate-500'}`}>{eq.eqClass}</span>
-                            </button>
-                        )) : <div className="p-8 text-center text-sm text-slate-400 font-medium italic">일치하는 설비가 없습니다.</div>}
-                    </div>
+                </div>
+            );
+        }
+
+        const TrendChart = ({ records, title, category, items, unit }) => {
+            const validRecords = records.filter(r => Object.keys(r[category] || {}).length > 0);
+            if (validRecords.length === 0) return null;
+            const timeRecords = validRecords.map(r => ({ ...r, timestamp: new Date(String(r.date).replace(" ", "T")).getTime() })).sort((a, b) => a.timestamp - b.timestamp);
+            const minTime = timeRecords[0].timestamp; const maxTime = timeRecords[timeRecords.length - 1].timestamp; const timeRange = maxTime - minTime || 1;
+            let maxVal = 10; timeRecords.forEach(r => items.forEach(item => { const v = parseFloat(String(r[category][item])); if (!isNaN(v) && v > maxVal) maxVal = v; }));
+            const plotMax = Math.ceil(maxVal / 5) * 5; 
+            const width = 100, height = 50, colors = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6'];
+            return (
+                <div className="bg-white p-4 pb-8 rounded-xl border border-slate-200 shadow-sm mb-4 print:shadow-none print:border-slate-300">
+                    <h4 className="font-bold text-slate-700 mb-1 text-sm font-black tracking-tight">{title} 트렌드 {unit && `(${unit})`}</h4>
+                    <div className="relative w-full mt-2"><svg viewBox={`-15 -5 ${width + 20} ${height + 20}`} className="w-full h-auto overflow-visible">
+                        {[0, 0.25, 0.5, 0.75, 1].map(v => { const y = height - (v * height); return <g key={v}><text x="-2" y={y + 1.5} fontSize="4" fill="#94a3b8" textAnchor="end">{Math.round(v * plotMax)}</text><line x1="0" y1={y} x2={width} y2={y} stroke="#f1f5f9" strokeWidth="0.5" /></g> })}
+                        {items.map((item, i) => {
+                            let d = ''; const points = [];
+                            timeRecords.forEach(r => { const val = parseFloat(String(r[category][item])); if (!isNaN(val)) { const x = ((r.timestamp - minTime) / timeRange) * width; const y = height - (val / plotMax * height); points.push({x, y}); d += `${d ? ' L' : 'M'} ${x} ${y}`; } });
+                            if (!d) return null;
+                            return <g key={`chart-${item}`}><path d={d} fill="none" stroke={colors[i % colors.length]} strokeWidth="1" strokeLinejoin="round" />{points.map((p, idx) => <circle key={idx} cx={p.x} cy={p.y} r="0.8" fill={colors[i % colors.length]} />)}</g>
+                        })}
+                        <text x="0" y={height + 7} fontSize="4" fill="#94a3b8" textAnchor="start">{String(timeRecords[0].date).split('T')[0].slice(5)}</text>
+                        {timeRecords.length > 1 && <text x={width} y={height + 7} fontSize="4" fill="#94a3b8" textAnchor="end">{String(timeRecords[timeRecords.length - 1].date).split('T')[0].slice(5)}</text>}
+                    </svg></div>
+                    <div className="flex flex-wrap gap-2 mt-4 justify-center">{items.map((item, i) => <span key={item} className="text-[8px] flex items-center text-slate-500 font-bold"><span className="w-1.5 h-1.5 rounded-full mr-1" style={{backgroundColor: colors[i % colors.length]}}></span>{item}</span>)}</div>
                 </div>
             );
         };
 
-        // --- 메인 앱 로직 ---
+        // --- 4. 메인 앱 컴포넌트 ---
 
         function App() {
             const [user, setUser] = useState(null);
@@ -262,253 +304,388 @@
             const [records, setRecords] = useState([]);
             const [activeTab, setActiveTab] = useState('form');
             const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
-            const [formEqClass, setFormEqClass] = useState('전체');
-            const [historyEqClass, setHistoryEqClass] = useState('전체');
-            const [historyEqId, setHistoryEqId] = useState('');
+            
+            // SETUP 상태
             const [newEqId, setNewEqId] = useState('');
             const [newEqName, setNewEqName] = useState('');
             const [newEqClass, setNewEqClass] = useState('C');
-            
-            // 💡 handleInputChange 함수를 최상단에 정의하여 ReferenceError 방지
-            const [formData, setFormData] = useState({ 
-                equipmentId: '', 
-                date: new Date().toISOString().slice(0, 16), 
-                vibration: {}, 
-                noise: {}, 
-                heating: {}, 
-                oil: { level: '양호', discoloration: '정상', leak: '정상' }, 
-                remarks: '' 
-            });
+            const [newDefaultParts, setNewDefaultParts] = useState([]);
+            const [newOilParts, setNewOilParts] = useState([]);
+            const [newExtraParts, setNewExtraParts] = useState([]);
+            const [setupEditMode, setSetupEditMode] = useState(false);
 
-            // 입력값 변경 통합 핸들러
-            function handleInputChange(field, value) {
-                setFormData(prev => ({ ...prev, [field]: value }));
-            }
+            // FORM/HISTORY 상태
+            const [formEqClass, setFormEqClass] = useState('전체');
+            const [historyEqClass, setHistoryEqClass] = useState('전체');
+            const [historyEqId, setHistoryEqId] = useState('');
+            const [historyView, setHistoryView] = useState('list'); 
+            const [startDate, setStartDate] = useState('');
+            const [endDate, setEndDate] = useState('');
 
-            const showMessage = (msg, type = 'success') => {
-                setToast({ show: true, message: String(msg), type });
-                setTimeout(() => setToast(p => ({ ...p, show: false })), 3000);
-            };
+            const [formData, setFormData] = useState({ equipmentId: '', date: getCurrentDateTimeLocal(), runStatus: '가동 중', vibration: {}, noise: {}, heating: {}, oil: {}, extra: {}, remarks: '', photo: [] });
+            const [editingId, setEditingId] = useState(null);
+            const [photoModal, setPhotoModal] = useState(null);
+            const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+            const [deleteModalState, setDeleteModalState] = useState({ isOpen: false, eqId: null, password: '', error: '' });
 
-            // Firebase 초기 인증
-            useEffect(() => {
-                const initAuth = async () => {
-                    try {
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                            try {
-                                await signInWithCustomToken(auth, __initial_auth_token);
-                            } catch (e) {
-                                await signInAnonymously(auth);
-                            }
-                        } else {
-                            await signInAnonymously(auth);
-                        }
-                    } catch (err) {
-                        setIsFirebaseLoading(false);
-                    }
-                };
-                initAuth();
-                const unsubscribe = onAuthStateChanged(auth, (authUser) => {
-                    setUser(authUser);
-                    if (!authUser) setIsFirebaseLoading(false);
-                });
-                return () => unsubscribe();
-            }, []);
+            const showMessage = (msg, type = 'success') => { setToast({ show: true, message: String(msg), type }); setTimeout(() => setToast(p => ({ ...p, show: false })), 3000); };
 
-            // Firebase 데이터 연동
-            useEffect(() => {
-                if (!user) return;
-                
-                const eqRef = collection(db, 'artifacts', appId, 'public', 'data', 'equipments');
-                const unsubEq = onSnapshot(eqRef, (snapshot) => {
-                    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                    if (data.length === 0) {
-                        INITIAL_EQUIPMENT_LIST.forEach(eq => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'equipments', eq.id), eq));
-                    } else {
-                        setEquipments(data);
-                    }
-                    setIsFirebaseLoading(false);
-                }, (error) => {
-                    if (error.code === 'permission-denied') setPermissionError(true);
-                    setIsFirebaseLoading(false);
-                });
-
-                const recRef = collection(db, 'artifacts', appId, 'public', 'data', 'records');
-                const unsubRec = onSnapshot(recRef, (snapshot) => {
-                    setRecords(snapshot.docs.map(doc => doc.data()));
-                }, (error) => { if (error.code === 'permission-denied') setPermissionError(true); });
-
-                return () => { unsubEq(); unsubRec(); };
-            }, [user]);
-
-            const handleEquipmentChange = (id) => {
-                if (!id) { 
-                    setFormData({ ...formData, equipmentId: '', vibration: {}, noise: {}, heating: {}, remarks: '' }); 
-                    return; 
+            const checkOverdue = useCallback((eq) => {
+                if (eq.eqClass === 'C' || eq.eqClass === 'D') return false; 
+                const eqRecords = records.filter(r => r.equipmentId === eq.id);
+                if (eqRecords.length === 0) return true;
+                const latest = new Date(eqRecords.sort((a,b) => new Date(b.date) - new Date(a.date))[0].date);
+                const now = new Date();
+                if (eq.eqClass === 'A') {
+                    const startOfWeek = new Date(now);
+                    startOfWeek.setDate(now.getDate() - now.getDay());
+                    startOfWeek.setHours(0, 0, 0, 0);
+                    return latest < startOfWeek;
                 }
-                const last = [...records].sort((a,b) => new Date(b.date) - new Date(a.date)).find(r => r.equipmentId === id);
-                if (last) {
-                    const clear = (obj) => Object.fromEntries(Object.keys(obj || {}).map(k => [k, '']));
-                    setFormData({ 
-                        ...formData, 
-                        equipmentId: id, 
-                        vibration: clear(last.vibration), 
-                        heating: clear(last.heating), 
-                        noise: last.noise || {}, 
-                        oil: last.oil || { level: '양호', discoloration: '정상', leak: '정상' } 
-                    });
-                } else setFormData({ ...formData, equipmentId: id });
-            };
+                if (eq.eqClass === 'B') {
+                    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+                    return latest < startOfMonth;
+                }
+                return false;
+            }, [records]);
 
-            const handleSave = async () => {
-                if (!formData.equipmentId) return showMessage('설비를 먼저 선택하세요.', 'error');
-                const id = Date.now().toString();
-                const eq = equipments.find(e => e.id === formData.equipmentId);
-                const data = { 
-                    ...formData, 
-                    id, 
-                    inspector: currentUser, 
-                    equipmentName: eq?.name, 
-                    eqClass: eq?.eqClass, 
-                    displayDate: new Date(formData.date).toLocaleString('ko-KR') 
-                };
-                try {
-                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'records', id), data);
-                    showMessage('저장되었습니다!'); 
-                    setFormData({ ...formData, equipmentId: '', vibration: {}, noise: {}, heating: {}, remarks: '' }); 
-                    setActiveTab('history');
-                } catch (e) { showMessage('저장 실패. 권한을 확인하세요.', 'error'); }
-            };
-
-            const handleAddEquipment = async () => {
-                const trimmedId = String(newEqId).trim().replace(/[^a-zA-Z0-9_-]/g, '_');
-                const trimmedName = String(newEqName).trim();
-                if (!trimmedId || !trimmedName) return showMessage('모든 항목을 입력하세요.', 'error');
-                try {
-                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'equipments', trimmedId), { id: trimmedId, name: trimmedName, eqClass: newEqClass });
-                    setNewEqId(''); setNewEqName(''); showMessage('설비가 등록되었습니다.');
-                } catch (err) { if (err.code === 'permission-denied') setPermissionError(true); }
-            };
+            const sortedEquipments = useMemo(() => {
+                const weights = { 'A': 1, 'B': 2, 'C': 3, 'D': 4 };
+                return [...equipments].sort((a, b) => {
+                    if (weights[a.eqClass] !== weights[b.eqClass]) return weights[a.eqClass] - weights[b.eqClass];
+                    const aOver = checkOverdue(a); const bOver = checkOverdue(b);
+                    if (aOver !== bOver) return aOver ? -1 : 1;
+                    return a.id.localeCompare(b.id);
+                });
+            }, [equipments, checkOverdue]);
 
             const filteredRecords = useMemo(() => {
                 let res = records;
                 if (historyEqClass !== '전체') res = res.filter(r => r.eqClass === historyEqClass);
                 if (historyEqId) res = res.filter(r => r.equipmentId === historyEqId);
-                return res.sort((a,b) => new Date(b.date) - new Date(a.date));
-            }, [records, historyEqClass, historyEqId]);
+                if (startDate) res = res.filter(r => r.date >= startDate);
+                if (endDate) res = res.filter(r => r.date <= endDate + "T23:59");
+                return [...res].sort((a, b) => new Date(String(b.date)) - new Date(String(a.date)));
+            }, [records, historyEqClass, historyEqId, startDate, endDate]);
 
-            if (permissionError) return (
-                <div className="min-h-screen flex items-center justify-center p-4">
-                    <div className="bg-white p-10 rounded-3xl shadow-2xl max-w-md text-center border-t-8 border-rose-500">
-                        <ShieldAlert className="w-16 h-16 text-rose-500 mx-auto mb-6" />
-                        <h1 className="text-2xl font-bold mb-4 text-slate-800 tracking-tight">서버 권한 오류</h1>
-                        <p className="text-sm text-slate-500 mb-8 leading-relaxed">파이어베이스 <b>Rules(규칙)</b> 메뉴에서 <br/> <b>allow read, write: if true;</b> 로 변경 후 <br/> <b>게시(Publish)</b> 버튼을 꼭 눌러주세요!</p>
-                        <button onClick={() => window.location.reload()} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-2xl font-bold shadow-lg transition-all active:scale-95">설정 완료 후 다시 시도하기</button>
-                    </div>
-                </div>
-            );
+            const chronologicalRecords = useMemo(() => [...filteredRecords].sort((a, b) => new Date(String(a.date)).getTime() - new Date(String(b.date)).getTime()), [filteredRecords]);
 
+            const renderCompactData = (data, unit = '') => {
+                const keys = Object.keys(data || {}); if (keys.length === 0) return <span className="text-slate-400">-</span>;
+                return <div className="flex flex-col gap-1 py-1">{keys.map(k => <div key={`d-${k}`} className="flex justify-between border-b border-slate-50 last:border-0 pb-1 text-[10px] leading-tight"><span className="text-slate-500 mr-1 font-bold">{k}:</span><strong className="text-slate-900 font-black">{String(data[k])}{unit}</strong></div>)}</div>;
+            };
+
+            const renderCompactStatusData = (data) => {
+                const keys = Object.keys(data || {}); if (keys.length === 0) return <span className="text-slate-400">-</span>;
+                return <div className="flex flex-col gap-1 py-1">{keys.map(k => { const status = String(data[k]); let color = "text-slate-700 font-bold"; if (status === '정상' || status === '양호') color = "text-emerald-600 font-bold"; else if (status === '주의' || status === '보충' || status === '변색') color = "text-amber-600 font-bold"; else color = "text-rose-600 font-bold"; return <div key={`s-${k}`} className="flex justify-between border-b border-slate-100 last:border-0 pb-1 text-[10px] leading-tight font-black"><span className="text-slate-500 mr-1 font-bold">{k}:</span><strong className={color}>{status}</strong></div>; })}</div>;
+            };
+
+            // --- 핸들러 함수 ---
+            const handleSetupItemClick = (eq) => {
+                setNewEqId(eq.id); setNewEqName(eq.name); setNewEqClass(eq.eqClass);
+                setNewDefaultParts(eq.defaultParts || []); setNewOilParts(eq.oilParts || []); setNewExtraParts(eq.extraParts || []);
+                setSetupEditMode(true);
+            };
+
+            const handleAddEquipment = async () => {
+                const trimmedId = String(newEqId).trim().replace(/\//g, '_');
+                const trimmedName = String(newEqName).trim();
+                
+                if (!trimmedId || !trimmedName) return showMessage('정보를 입력하세요.', 'error');
+                if (!setupEditMode && equipments.some(eq => eq.id === trimmedId)) return showMessage('이미 존재하는 ID입니다.', 'error');
+
+                try {
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'equipments', trimmedId), { 
+                        id: trimmedId, name: trimmedName, eqClass: newEqClass, 
+                        defaultParts: newDefaultParts, oilParts: newOilParts, extraParts: newExtraParts
+                    });
+                    setNewEqId(''); setNewEqName(''); setNewDefaultParts([]); setNewOilParts([]); setNewExtraParts([]); setSetupEditMode(false);
+                    showMessage(setupEditMode ? '수정 완료' : '등록 성공');
+                } catch (err) { showMessage('데이터 저장 권한 오류', 'error'); }
+            };
+
+            const handleEquipmentChange = (newId) => {
+                if (editingId) { setFormData(prev => ({ ...prev, equipmentId: newId })); return; }
+                if (!newId) { setFormData(p => ({ ...p, equipmentId: '', vibration: {}, noise: {}, heating: {}, oil: {}, extra: {}, photo: [], remarks: '' })); return; }
+                const nowTime = getCurrentDateTimeLocal();
+                const last = [...records].filter(r => r.equipmentId === newId).sort((a,b) => new Date(String(b.date)) - new Date(String(a.date)))[0];
+                const masterEq = equipments.find(e => e.id === newId);
+                if (last) {
+                    const clearNum = (obj) => Object.fromEntries(Object.keys(obj || {}).map(k => [k, '']));
+                    setFormData({ ...formData, equipmentId: newId, date: nowTime, runStatus: last.runStatus || '가동 중', vibration: clearNum(last.vibration), heating: clearNum(last.heating), noise: last.noise || {}, oil: last.oil || {}, extra: { ...clearNum(last.extra), mSeal: last.extra?.mSeal || '양호' }, remarks: '', photo: [] });
+                } else if (masterEq) {
+                    const defV = Object.fromEntries((masterEq.defaultParts || []).map(p => [p, '']));
+                    const defN = Object.fromEntries((masterEq.defaultParts || []).map(p => [p, '정상']));
+                    const defO = Object.fromEntries((masterEq.oilParts || []).map(p => [p, p === 'level' ? '양호' : '정상']));
+                    const defE = {};
+                    if (masterEq.extraParts?.includes('amphere')) defE.amphere = '';
+                    if (masterEq.extraParts?.includes('mSeal')) defE.mSeal = '양호';
+                    setFormData({ ...formData, equipmentId: newId, date: nowTime, runStatus: '가동 중', vibration: defV, heating: defV, noise: defN, oil: defO, extra: defE, remarks: '', photo: [] });
+                }
+            };
+
+            const handleSave = async () => {
+                if (!formData.equipmentId) return showMessage('설비를 선택하세요.', 'error');
+                const id = editingId || Date.now().toString();
+                const eq = equipments.find(e => e.id === formData.equipmentId);
+                const data = { ...formData, id, inspector: currentUser, equipmentName: eq?.name || '알 수 없음', eqClass: eq?.eqClass || 'C', displayDate: new Date(formData.date).toLocaleString('ko-KR') };
+                try {
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'records', id), data);
+                    showMessage('저장 성공'); setEditingId(null); setFormData(p => ({ ...p, equipmentId: '', vibration: {}, noise: {}, heating: {}, oil: {}, extra: {}, photo: [], remarks: '' })); setActiveTab('history');
+                } catch (e) { showMessage('저장 오류', 'error'); }
+            };
+
+            const handleFileUpload = async (event) => {
+                const file = event.target.files[0]; if (!file) return;
+                showMessage('엑셀 읽는 중...');
+                try {
+                    const reader = new FileReader();
+                    reader.onload = async (e) => {
+                        const data = new Uint8Array(e.target.result);
+                        const workbook = XLSX.read(data, { type: 'array', codepage: 949 });
+                        const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
+                        for (let i = 1; i < rows.length; i++) {
+                            const row = rows[i]; if (!row || row.length < 2) continue; 
+                            const id = String(row[0] || '').trim().replace(/\//g, '_'); 
+                            const name = String(row[1] || '').trim(); let eqClass = String(row[2] || '').trim().toUpperCase();
+                            let defParts = String(row[3] || '').split(',').map(s => s.trim()).filter(s => s); 
+                            if (!id || !name) continue; if (!['A','B','C','D'].includes(eqClass)) eqClass = 'C';
+                            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'equipments', id), { id, name, eqClass, defaultParts: defParts, oilParts: OIL_FIELDS, extraParts: EXTRA_FIELDS });
+                        }
+                        showMessage('일괄 업로드 완료');
+                    };
+                    reader.readAsArrayBuffer(file);
+                } catch(err) { showMessage('파일 처리 오류', 'error'); } finally { event.target.value = null; }
+            };
+
+            const handleDownloadSample = () => {
+                const csvHeader = "설비ID,설비명,등급(A/B/C/D),기본점검부위(콤마구분)\n";
+                const csvData = "P-101,펌프A,A,\"Motor, Gearbox, 본체\"\nC-201,공압기,B,\"Motor, Gearbox, 본체, Oil Pump\"";
+                const blob = new Blob(["\ufeff" + csvHeader + csvData], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement("a"); link.setAttribute("href", url); link.setAttribute("download", "PM_Sample.csv"); link.click();
+            };
+
+            // 💡 [해결] PDF 다운로드 시 잘림 방지 스타일 적용
+            const handleDownloadPDF = async (targetId) => {
+                setIsGeneratingPDF(true); showMessage('PDF 생성 중...');
+                try {
+                    const targetElement = document.getElementById(targetId);
+                    const originalStyle = targetElement.style.cssText;
+                    targetElement.style.height = 'max-content';
+                    targetElement.style.overflow = 'visible';
+
+                    const canvas = await html2canvas(targetElement, { scale: 2, useCORS: true, backgroundColor: '#ffffff', scrollY: -window.scrollY });
+                    
+                    targetElement.style.cssText = originalStyle;
+
+                    const pdf = new jspdf.jsPDF('p', 'mm', 'a4');
+                    const pdfWidth = pdf.internal.pageSize.getWidth();
+                    const pdfHeight = pdf.internal.pageSize.getHeight();
+                    const imgHeight = (canvas.height * pdfWidth) / canvas.width;
+                    
+                    let heightLeft = imgHeight; 
+                    let position = 0;
+                    
+                    pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, position, pdfWidth, imgHeight); 
+                    heightLeft -= pdfHeight;
+                    
+                    while (heightLeft > 0) { 
+                        position = heightLeft - imgHeight; 
+                        pdf.addPage(); 
+                        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, position, pdfWidth, imgHeight); 
+                        heightLeft -= pdfHeight; 
+                    }
+                    pdf.save(`PM_Report_${new Date().toISOString().slice(0,10)}.pdf`); 
+                    showMessage('저장 완료');
+                } catch (e) { showMessage('PDF 생성 실패', 'error'); } finally { setIsGeneratingPDF(false); }
+            };
+
+            const handleDownloadExcel = () => {
+                const headers = ["점검일시", "상태", "설비ID", "설비명", "등급", "점검자", "진동", "이음", "발열", "암페어", "M/Seal", "오일", "특이사항"];
+                let csv = "\ufeff" + headers.join(",") + "\n";
+                filteredRecords.forEach(r => {
+                    const vib = Object.entries(r.vibration || {}).map(([k,v]) => `${k}:${v}`).join(' ');
+                    const noi = Object.entries(r.noise || {}).map(([k,v]) => `${k}:${v}`).join(' ');
+                    const heat = Object.entries(r.heating || {}).map(([k,v]) => `${k}:${v}`).join(' ');
+                    csv += [String(r.date).replace("T", " "), r.runStatus, r.equipmentId, r.equipmentName, r.eqClass, r.inspector, vib, noi, heat, r.extra?.amphere||'', r.extra?.mSeal||'', `${r.oil?.level}/${r.oil?.discoloration}/${r.oil?.leak}`, `"${r.remarks}"`].join(",") + "\n";
+                });
+                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.setAttribute("href", url); link.setAttribute("download", "PM_Data.csv"); link.click();
+            };
+
+            const handleConfirmDelete = async () => {
+                if (deleteModalState.password === 'kpb1234') {
+                    try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'equipments', deleteModalState.eqId)); setDeleteModalState({ isOpen: false, eqId: null, password: '', error: '' }); showMessage('삭제 완료'); } 
+                    catch (err) { setDeleteModalState(prev => ({ ...prev, error: '삭제 실패' })); }
+                } else { setDeleteModalState(prev => ({ ...prev, error: '비밀번호 불일치' })); }
+            };
+
+            // --- Firebase 연동 ---
+            useEffect(() => {
+                const initAuth = async () => {
+                    try {
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            try { await signInWithCustomToken(auth, __initial_auth_token); } catch (e) { await signInAnonymously(auth); }
+                        } else { await signInAnonymously(auth); }
+                    } catch (err) { setIsFirebaseLoading(false); }
+                };
+                initAuth();
+                const unsubscribe = onAuthStateChanged(auth, setUser);
+                return () => unsubscribe();
+            }, []);
+
+            useEffect(() => {
+                if (!user) return;
+                const eqRef = collection(db, 'artifacts', appId, 'public', 'data', 'equipments');
+                const unsubEq = onSnapshot(eqRef, (snap) => {
+                    const data = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    if (data.length === 0) INITIAL_EQUIPMENT_LIST.forEach(eq => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'equipments', eq.id), eq));
+                    else setEquipments(data);
+                    setIsFirebaseLoading(false);
+                }, (err) => { if(err.code === 'permission-denied') setPermissionError(true); setIsFirebaseLoading(false); });
+
+                const recRef = collection(db, 'artifacts', appId, 'public', 'data', 'records');
+                const unsubRec = onSnapshot(recRef, (snap) => { setRecords(snap.docs.map(doc => doc.data())); }, (err) => { if(err.code === 'permission-denied') setPermissionError(true); });
+                return () => { unsubEq(); unsubRec(); };
+            }, [user]);
+
+            if (permissionError) return <div className="min-h-screen flex items-center justify-center p-4 bg-slate-100 text-center"><div className="bg-white p-10 rounded-3xl shadow-xl max-w-md"><ShieldAlert className="w-16 h-16 text-rose-500 mx-auto mb-6" /><h1 className="text-xl font-bold mb-4 text-slate-800 font-black">서버 보안 설정 필요</h1><p className="text-sm text-slate-500 mb-8 leading-relaxed">Firebase Database 규칙을 'allow read, write: if true;'로 수정해 주세요.</p><button onClick={() => window.location.reload()} className="w-full bg-blue-700 text-white py-4 rounded-2xl font-bold">새로고침</button></div></div>;
             if (!currentUser) return <LoginScreen onLogin={setCurrentUser} />;
-            if (isFirebaseLoading) return <div className="min-h-screen flex items-center justify-center bg-white"><div className="flex flex-col items-center gap-4"><Loader2 className="w-10 h-10 text-blue-600 animate-spin" /><p className="font-bold text-slate-400">서버 데이터 동기화 중...</p></div></div>;
+            if (isFirebaseLoading) return <div className="min-h-screen flex items-center justify-center bg-white flex-col gap-4"><Loader2 className="w-10 h-10 text-blue-600 animate-spin" /><p className="font-bold text-slate-400 font-black tracking-tight">데이터 동기화 중...</p></div>;
 
             return (
                 <div className="min-h-screen bg-slate-50 max-w-md mx-auto shadow-2xl flex flex-col relative overflow-hidden ring-1 ring-slate-200">
-                    <header className="bg-white text-slate-800 p-5 sticky top-0 z-20 flex justify-between items-center border-b border-slate-100 shadow-sm">
-                        <div className="flex items-center gap-2.5">
-                            <div className="p-2 bg-blue-600 rounded-xl"><Wrench className="w-5 h-5 text-white" /></div>
-                            <h1 className="text-xl font-black tracking-tighter text-slate-900">PM SMART</h1>
-                        </div>
-                        <div className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-full border border-slate-200 shadow-inner">
-                            <User className="w-3.5 h-3.5 text-slate-500" />
-                            <span className="text-xs font-black text-slate-700">{currentUser}</span>
-                        </div>
+                    <header className="bg-blue-700 text-white p-4 sticky top-0 z-20 flex justify-between items-center shadow-md">
+                        <div className="flex items-center gap-2 font-black tracking-tight"><Wrench className="w-5 h-5" /><h1>스마트 P.M 기록</h1></div>
+                        <div className="flex items-center gap-2 bg-blue-800 px-3 py-1.5 rounded-full shadow-inner"><User className="w-3.5 h-3.5" /><span className="text-xs font-bold">{currentUser}</span></div>
                     </header>
 
-                    <main className="flex-1 overflow-y-auto p-5 pb-32">
+                    <main className="flex-1 overflow-y-auto p-4 pb-28">
                         {activeTab === 'form' && (
                             <div className="space-y-4 animate-in fade-in duration-300">
-                                <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 mb-6">
-                                    <label className="block text-xs font-black text-blue-600 mb-3 uppercase tracking-widest">1. 점검 설비 선택</label>
-                                    <EquipmentSelector equipments={equipments} selectedId={formData.equipmentId} onSelect={handleEquipmentChange} selectedClass={formEqClass} onClassChange={setFormEqClass} />
-                                    <label className="block text-xs font-black text-blue-600 mt-6 mb-3 uppercase tracking-widest">2. 점검 일시</label>
-                                    <div className="relative"><Clock className="w-4 h-4 absolute left-4 top-4 text-slate-400" /><input type="datetime-local" className="w-full pl-11 p-3.5 bg-slate-50 border border-slate-100 rounded-2xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500" value={formData.date} onChange={e => handleInputChange('date', e.target.value)} /></div>
+                                <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 mb-6 transition-all hover:border-blue-200">
+                                    <div className="flex items-center mb-4 border-b border-slate-50 pb-2"><ClipboardCheck className="w-5 h-5 text-slate-500 mr-2" /><span className="font-bold text-slate-800 font-black tracking-tight">대상 설비 및 일시 점검</span></div>
+                                    <EquipmentSelector equipments={sortedEquipments} records={records} selectedId={formData.equipmentId} onSelect={handleEquipmentChange} selectedClass={formEqClass} onClassChange={setFormEqClass} checkOverdue={checkOverdue} />
+                                    <div className="mt-4 flex gap-2 p-1 bg-slate-100 rounded-xl shadow-inner font-black">{['가동 중', '정지 중'].map(st => (<button key={st} onClick={() => setFormData(p => ({ ...p, runStatus: st }))} className={`flex-1 py-2 text-xs rounded-lg transition-all flex items-center justify-center gap-1.5 ${formData.runStatus === st ? (st === '가동 중' ? 'bg-blue-600 text-white shadow-md' : 'bg-rose-500 text-white shadow-md') : 'text-slate-400 hover:bg-white/50'}`}><Power className="w-3.5 h-3.5" />{st}</button>))}</div>
+                                    <div className="relative mt-3 shadow-sm"><Clock className="w-4 h-4 absolute left-3 top-3 text-slate-400" /><input type="datetime-local" className="w-full pl-9 p-2.5 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500 transition-all font-black text-slate-700" value={formData.date} onChange={e => setFormData(p=>({...p, date: e.target.value}))} /></div>
                                 </div>
-                                <CategorySection title="진동 점검 (mm/s)" icon={Activity} type="numeric" unit="mm/s" items={['Motor', 'Gearbox', '본체', 'Oil Pump']} data={formData.vibration} onChange={v => handleInputChange('vibration', v)} />
-                                <CategorySection title="이음 점검" icon={Volume2} type="status" items={['Motor', 'Gearbox', '본체', 'Bearing']} data={formData.noise} onChange={n => handleInputChange('noise', n)} />
-                                <CategorySection title="발열 점검 (°C)" icon={Flame} type="numeric" unit="°C" items={['Motor', 'Gearbox', '본체', 'Bearing']} data={formData.heating} onChange={h => handleInputChange('heating', h)} />
-                                <OilSection data={formData.oil} onChange={o => handleInputChange('oil', o)} />
-                                <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 mb-10">
-                                    <label className="block text-xs font-black text-blue-600 mb-3 uppercase tracking-widest">추가 메모</label>
-                                    <textarea rows="3" placeholder="특이사항 및 조치내역을 자유롭게 입력하세요." className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all font-medium" value={formData.remarks} onChange={(e) => handleInputChange('remarks', e.target.value)}></textarea>
-                                    <button onClick={handleSave} className="w-full mt-6 bg-blue-600 hover:bg-blue-700 text-white font-black py-4.5 rounded-2xl shadow-xl shadow-blue-200 flex items-center justify-center gap-3 transition-all active:scale-95 text-lg"><Save className="w-6 h-6" /> 점검 데이터 전송</button>
-                                </div>
+
+                                <CategorySection title="진동 점검 (mm/s)" icon={Activity} type="numeric" unit="mm/s" items={ALL_PARTS} data={formData.vibration} onChange={v => setFormData(p=>({...p, vibration: v}))} />
+                                <CategorySection title="이음 점검" icon={Volume2} type="status" items={ALL_PARTS} data={formData.noise} onChange={n => setFormData(p=>({...p, noise: n}))} />
+                                <CategorySection title="발열 점검 (°C)" icon={Flame} type="numeric" unit="°C" items={ALL_PARTS} data={formData.heating} onChange={h => setFormData(p=>({...p, heating: h}))} />
+                                {equipments.find(e => e.id === formData.equipmentId)?.oilParts?.length > 0 && <OilSection itemsToShow={equipments.find(e => e.id === formData.equipmentId).oilParts} data={formData.oil} onChange={o => setFormData(p=>({...p, oil: o}))} />}
+                                {equipments.find(e => e.id === formData.equipmentId)?.extraParts?.length > 0 && <ExtraSection itemsToShow={equipments.find(e => e.id === formData.equipmentId).extraParts} data={formData.extra} onChange={e => setFormData(p=>({...p, extra: e}))} />}
+                                
+                                <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 mb-6 transition-all hover:border-blue-100 font-bold"><label className="text-sm font-bold text-slate-700 flex items-center gap-2 mb-3"><Camera className="w-4 h-4 text-slate-400"/> 현장 사진 첨부</label>{formData.photo && formData.photo.length > 0 && <div className="grid grid-cols-2 gap-2 mb-4">{formData.photo.map((p, i) => (<div key={i} className="relative rounded-xl border overflow-hidden shadow-sm"><img src={p} className="w-full h-32 object-cover" onClick={() => setPhotoModal(p)} /><button onClick={() => setFormData(prev => ({...prev, photo: prev.photo.filter((_, idx) => idx !== i)}))} className="absolute top-1 right-1 bg-black/50 text-white p-1 rounded-full"><X className="w-3 h-3"/></button></div>))}</div>}<label className="w-full bg-slate-50 hover:bg-slate-100 text-slate-500 font-bold py-6 rounded-2xl flex flex-col items-center justify-center cursor-pointer border-2 border-dashed active:scale-95 transition-all"><Camera className="w-8 h-8 mb-2"/><span className="text-sm font-black text-slate-400">사진 촬영 / 파일 선택</span><input type="file" accept="image/*" multiple capture="environment" className="hidden" onChange={async (e) => { const fs = Array.from(e.target.files); if (fs.length > 0) { showMessage('사진 압축 중...'); const cs = []; for (const f of fs) cs.push(await compressImage(f)); setFormData(p => ({ ...p, photo: [...(p.photo || []), ...cs] })); showMessage('첨부 완료'); } }} /></label></div>
+                                <div className="bg-white p-5 rounded-2xl shadow-sm border mb-10"><textarea rows="3" placeholder="특이사항 입력..." className="w-full p-4 bg-slate-50 border rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500" value={formData.remarks} onChange={(e) => setFormData(p=>({...p, remarks: e.target.value}))}></textarea><button onClick={handleSave} className="w-full mt-6 bg-blue-700 text-white font-bold py-4 rounded-xl shadow-lg flex items-center justify-center gap-2 active:scale-95 transition-all font-black text-lg tracking-tighter"><Save className="w-6 h-6" /> {editingId ? '기록 수정 저장' : '점검 결과 전송'}</button></div>
                             </div>
                         )}
 
                         {activeTab === 'history' && (
                             <div className="space-y-4 animate-in fade-in duration-300">
-                                <EquipmentSelector equipments={equipments} selectedId={historyEqId} onSelect={setHistoryEqId} selectedClass={historyEqClass} onClassChange={setHistoryEqClass} />
-                                <div className="flex bg-slate-200/50 p-1.5 rounded-2xl border border-slate-200">
-                                    <button onClick={() => showMessage('준비 중인 기능입니다.')} className="flex-1 py-2 text-xs font-bold rounded-xl bg-white shadow-md text-blue-700">리스트 뷰</button>
-                                    <button onClick={() => showMessage('준비 중인 기능입니다.')} className="flex-1 py-2 text-xs font-bold rounded-xl text-slate-500 hover:bg-white/50">보고서 형태</button>
+                                <div className="bg-white p-3 rounded-xl border border-slate-200 sticky top-0 z-10 shadow-sm space-y-3">
+                                    <EquipmentSelector equipments={sortedEquipments} records={records} selectedId={historyEqId} onSelect={setHistoryEqId} selectedClass={historyEqClass} onClassChange={setHistoryEqClass} checkOverdue={checkOverdue} />
+                                    <div className="flex gap-2"><input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)} className="flex-1 p-2 border rounded-lg text-[11px] font-bold bg-slate-50 font-black tracking-tight" /><input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="flex-1 p-2 border rounded-lg text-[11px] font-bold bg-slate-50 font-black tracking-tight" /></div>
+                                    <div className="flex bg-slate-100 p-1 rounded-xl shadow-inner font-black"><button onClick={() => setHistoryView('list')} className={`flex-1 py-2 text-xs rounded-lg transition-all ${historyView === 'list' ? 'bg-white shadow-md text-blue-700 font-black' : 'text-slate-400 font-bold'}`}>목록</button><button onClick={() => setHistoryView('trend')} className={`flex-1 py-2 text-xs rounded-lg transition-all ${historyView === 'trend' ? 'bg-white shadow-md text-blue-700 font-black' : 'text-slate-400 font-bold'}`} disabled={!historyEqId}>트렌드</button><button onClick={() => setHistoryView('report')} className={`flex-1 py-2 text-xs rounded-lg transition-all ${historyView === 'report' ? 'bg-white shadow-md text-blue-700 font-black' : 'text-slate-400 font-bold'}`}>보고서</button></div>
                                 </div>
-                                <div className="space-y-3">
-                                    {filteredRecords.map(r => (
-                                        <div key={r.id} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
-                                            <div className="flex justify-between items-start mb-4 border-b border-slate-50 pb-3">
-                                                <div className="flex flex-col"><span className="text-[10px] font-black text-blue-500 mb-0.5 tracking-tighter uppercase">{r.eqClass}급 설비</span><h3 className="font-extrabold text-slate-800 text-base leading-none">[{r.equipmentId}] {r.equipmentName}</h3></div>
-                                                <span className="text-[10px] text-slate-400 font-bold bg-slate-50 px-2 py-1 rounded-lg">{r.displayDate}</span>
+                                
+                                {historyView === 'trend' && historyEqId && (
+                                    <div className="space-y-4 animate-in zoom-in-95">
+                                        {/* 💡 [해결 2] 트렌드 PDF 캡처 대상 외부로 저장 버튼 이동 */}
+                                        <div className="flex gap-2 mb-2" data-html2canvas-ignore="true">
+                                            <button onClick={() => handleDownloadExcel()} className="flex-1 bg-emerald-600 text-white py-2.5 rounded-xl text-[11px] font-black shadow-sm flex items-center justify-center gap-1 active:scale-95 transition-all"><FileSpreadsheet className="w-3.5 h-3.5" /> 데이터 엑셀 저장</button>
+                                            <button onClick={() => handleDownloadPDF('trend-view-container')} className="flex-1 bg-slate-800 text-white py-2.5 rounded-xl text-[11px] font-black shadow-sm flex items-center justify-center gap-1 active:scale-95 transition-all"><FileText className="w-3.5 h-3.5" /> 화면 PDF 저장</button>
+                                        </div>
+                                        
+                                        {/* 💡 [해결 1] 트렌드 대상 정보 헤더 추가 및 캡처 전용 컨테이너 명시 */}
+                                        <div id="trend-view-container" className="bg-white p-6 pb-10 rounded-2xl shadow-sm border border-slate-200">
+                                            <div className="mb-6 border-b-2 border-slate-800 pb-4">
+                                                <h2 className="text-xl font-black text-slate-900 tracking-tighter flex items-center gap-2"><TrendingUp className="w-5 h-5 text-blue-600" /> 설비 수치 트렌드 보고서</h2>
+                                                <table className="text-[10px] text-left mt-3">
+                                                    <tbody>
+                                                        <tr><th className="p-1.5 bg-slate-50 border w-16 font-bold text-slate-500">점검 대상</th><td className="p-1.5 border font-black text-blue-700 tracking-tight">[{historyEqId}] {equipments.find(e=>e.id===historyEqId)?.name}</td></tr>
+                                                        <tr><th className="p-1.5 bg-slate-50 border font-bold text-slate-500">조회 기간</th><td className="p-1.5 border font-bold">{startDate || '전체'} ~ {endDate || '전체'}</td></tr>
+                                                        <tr><th className="p-1.5 bg-slate-50 border font-bold text-slate-500">출력 일자</th><td className="p-1.5 border font-bold">{new Date().toLocaleDateString('ko-KR')}</td></tr>
+                                                    </tbody>
+                                                </table>
                                             </div>
-                                            <div className="space-y-2.5">
-                                                <div className="flex flex-wrap gap-2">{Object.entries(r.vibration || {}).map(([k,v]) => v && <span key={k} className="text-[10px] bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full font-bold border border-blue-100">{k}: {v}</span>)}</div>
-                                                <div className="flex flex-wrap gap-2">{Object.entries(r.noise || {}).map(([k,v]) => v && <span key={k} className={`text-[10px] px-2.5 py-1 rounded-full font-bold border ${v==='정상'?'bg-emerald-50 text-emerald-700 border-emerald-100':'bg-rose-50 text-rose-700 border-rose-100'}`}>{k}: {v}</span>)}</div>
-                                                {r.remarks && <div className="mt-3 p-3 bg-amber-50 rounded-2xl border border-amber-100 text-[11px] text-amber-900 font-medium leading-relaxed italic">"{r.remarks}"</div>}
+                                            {/* 💡 [해결 3] 하단 여백 부족으로 잘리는 현상 방지를 위해 컨테이너 여백 강화 */}
+                                            <TrendChart records={chronologicalRecords} title="진동" category="vibration" items={['Motor', 'Gearbox', '본체', 'Oil Pump']} unit="mm/s" />
+                                            <TrendChart records={chronologicalRecords} title="발열" category="heating" items={['Motor', 'Gearbox', '본체', 'Bearing']} unit="°C" />
+                                        </div>
+                                    </div>
+                                )}
+                                
+                                {historyView === 'report' && (
+                                    <div className="space-y-4 animate-in slide-in-from-bottom-4">
+                                        <div className="flex gap-2" data-html2canvas-ignore="true">
+                                            <button onClick={handleDownloadExcel} className="flex-1 bg-emerald-600 text-white py-3.5 rounded-xl text-xs font-black shadow-md flex items-center justify-center gap-2 active:scale-95 transition-all"><FileSpreadsheet className="w-4 h-4" /> 엑셀 저장</button>
+                                            <button onClick={() => handleDownloadPDF('pdf-report-container')} disabled={isGeneratingPDF} className="flex-1 bg-slate-800 text-white py-3.5 rounded-xl text-xs font-black shadow-md flex items-center justify-center gap-2 active:scale-95 transition-all">{isGeneratingPDF ? '생성중...' : <><FileText className="w-4 h-4" /> PDF 보고서 저장</>}</button>
+                                        </div>
+                                        <div className="overflow-x-auto border-2 border-slate-300 rounded-2xl bg-slate-200 hide-scrollbar shadow-inner">
+                                            <div id="pdf-report-container" className="bg-white p-10 w-[850px] font-sans">
+                                                <div className="flex justify-between items-start mb-8 border-b-4 border-slate-900 pb-6"><div><h1 className="text-2xl font-black text-slate-900 mb-4 tracking-tighter uppercase font-black tracking-tight underline decoration-blue-500">PM 점검 종합 보고서</h1><table className="text-[10px] text-left"><tbody><tr><th className="border p-2.5 bg-slate-50 w-24 font-bold">조회 등급</th><td className="border p-2.5 font-bold text-blue-800 w-48">{historyEqClass}급 설비</td></tr><tr><th className="border p-2.5 bg-slate-50 font-bold">점검 대상</th><td className="border p-2.5 font-bold text-slate-800">{historyEqId ? `[${historyEqId}] ${equipments.find(e=>e.id===historyEqId)?.name}` : '그룹 내 전체 설비'}</td></tr><tr><th className="border p-2.5 bg-slate-50 font-bold">출력 일자</th><td className="border p-2.5 font-medium">{new Date().toLocaleDateString('ko-KR')}</td></tr></tbody></table></div><table className="text-xs text-center border-collapse mt-4 shadow-sm"><tbody><tr><th rowSpan="2" className="border-2 border-slate-800 p-3 bg-slate-100 text-sm font-black">결<br/>재</th><th className="border-2 border-slate-800 p-1.5 w-20 bg-slate-50 font-bold text-[10px]">담당</th><th className="border-2 border-slate-800 p-1.5 w-20 bg-slate-50 font-bold text-[10px]">검토</th><th className="border-2 border-slate-800 p-1.5 w-20 bg-slate-50 font-bold text-[10px]">확인</th><th className="border-2 border-slate-600 p-1.5 w-20 bg-slate-50 font-bold text-[10px]">승인</th></tr><tr><td className="border-2 border-slate-800 h-16"></td><td className="border-2 border-slate-800 h-16"></td><td className="border-2 border-slate-800 h-16"></td><td className="border-2 border-slate-800 h-16"></td></tr></tbody></table></div>
+                                                <div className="mb-8"><h3 className="font-bold text-xl mb-4 border-l-8 border-blue-600 pl-3 text-slate-800 tracking-tighter">1. 상세 점검 내역</h3><table className="w-full text-[10px] border-collapse border-2 border-slate-800"><thead><tr className="bg-slate-200 border-b-2 border-slate-800 font-black"><th>일시</th><th>상태</th><th>등급</th><th>설비명</th><th>점검자</th><th className="w-20">암페어</th><th className="w-20">M/Seal</th><th className="w-48 text-center">조치 결과</th></tr></thead><tbody>{filteredRecords.map(r=><tr key={r.id} className="border-b hover:bg-slate-50 font-bold"><td className="border p-2 text-center font-medium whitespace-nowrap tracking-tighter">{String(r.date).replace('T',' ')}</td><td className="border p-2 text-center font-bold text-blue-600">{r.runStatus}</td><td className="border p-2 text-center font-bold">{r.eqClass}</td><td className="border p-2 font-bold text-slate-700">[{r.equipmentId}] {r.equipmentName}</td><td className="border p-2 text-center font-bold">{r.inspector}</td><td className="border p-2 text-center font-bold text-blue-700">{r.extra?.amphere||'-'}</td><td className="border p-2 text-center font-bold">{r.extra?.mSeal||'-'}</td><td className="border p-2 text-[9px] leading-normal font-medium text-slate-600 italic">"{r.remarks || '특이사항 없음'}"</td></tr>)}</tbody></table></div>
                                             </div>
                                         </div>
-                                    ))}
-                                    {filteredRecords.length === 0 && <div className="p-20 text-center flex flex-col items-center gap-4"><History className="w-12 h-12 text-slate-200" /><p className="text-sm font-bold text-slate-300 tracking-tight">저장된 점검 기록이 없습니다.</p></div>}
-                                </div>
+                                    </div>
+                                )}
+                                {historyView === 'list' && filteredRecords.map(r => (
+                                    <div key={r.id} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm relative transition-all hover:shadow-md animate-in slide-in-from-bottom-2"><div className="flex justify-between items-start mb-3 border-b pb-3 border-slate-50"><div className="flex flex-col"><div className="flex items-center gap-1.5 mb-1"><span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${r.runStatus === '가동 중' ? 'bg-blue-100 text-blue-600' : 'bg-rose-100 text-rose-600'}`}>{r.runStatus}</span><span className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">{r.eqClass}급 설비</span></div><h3 className="font-extrabold text-slate-800 text-base leading-tight font-black underline decoration-blue-500 tracking-tight">[{r.equipmentId}] {r.equipmentName}</h3></div><div className="text-right"><div className="text-[10px] text-slate-400 mb-1 font-bold">{r.displayDate}</div><button onClick={() => { setFormData({...r}); setEditingId(r.id); setActiveTab('form'); }} className="p-1.5 bg-blue-50 text-blue-600 rounded-lg shadow-sm hover:bg-blue-100 transition-colors"><Edit2 className="w-3.5 h-3.5" /></button></div></div><div className="grid grid-cols-2 gap-3 text-[10px]"><div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 flex flex-col gap-1 font-black"><span className="text-slate-400 text-[8px] uppercase tracking-widest font-black">vibration</span>{Object.entries(r.vibration || {}).map(([k,v])=>v && <div key={k} className="flex justify-between"><span>{k}</span><b className="text-blue-700">{v}</b></div>)}</div><div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 flex flex-col gap-1 font-black"><span className="text-slate-400 text-[8px] uppercase font-black tracking-widest">noise</span>{Object.entries(r.noise || {}).map(([k,v])=>v && <div key={k} className="flex justify-between"><span>{k}</span><b className={v==='정상'?'text-emerald-600':'text-rose-600'}>{v}</b></div>)}</div><div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 col-span-2 flex justify-between items-center tracking-tight font-bold text-slate-600 font-black"><span>암페어: <b>{r.extra?.amphere||'-'}</b> / M.Seal: <b>{r.extra?.mSeal||'-'}</b> / 오일: <b>{r.oil?.level}/{r.oil?.discoloration}</b></span></div></div>{r.remarks && <div className="mt-3 p-3 bg-amber-50 rounded-xl text-[11px] text-amber-900 border border-amber-100 font-medium leading-relaxed italic shadow-inner tracking-tighter">"{r.remarks}"</div>}{r.photo && r.photo.length > 0 && <div className="mt-3 flex gap-2 overflow-x-auto pb-1">{r.photo.map((p, i) => <img key={i} src={p} className="w-16 h-16 object-cover rounded-lg border border-slate-200 cursor-pointer shadow-sm hover:ring-2 hover:ring-blue-400 transition-all" onClick={() => setPhotoModal(p)} />)}</div>}</div>
+                                ))}
                             </div>
                         )}
 
                         {activeTab === 'settings' && (
                             <div className="space-y-6 animate-in fade-in duration-300">
-                                <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
-                                    <h3 className="font-black text-slate-800 mb-5 flex items-center gap-2"><Settings className="w-5 h-5 text-blue-600" /> 신규 설비 등록</h3>
-                                    <div className="space-y-4">
-                                        <div className="flex gap-3">
-                                            <input type="text" placeholder="설비 ID (P-101)" className="flex-[3] p-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none font-bold text-slate-700 focus:ring-2 focus:ring-blue-500" value={newEqId} onChange={e=>setNewEqId(e.target.value)} />
-                                            <select className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-2xl outline-none font-black text-blue-600" value={newEqClass} onChange={e=>setNewEqClass(e.target.value)}><option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option></select>
+                                <div className="bg-white p-6 rounded-3xl border-2 border-slate-100 shadow-sm transition-all hover:border-blue-200">
+                                    <h3 className="font-black text-slate-800 mb-5 flex items-center gap-2 font-black"><Settings className="w-5 h-5 text-blue-600" /> {setupEditMode ? '설비 마스터 수정' : '데이터베이스 관리'}</h3>
+                                    {!setupEditMode && (
+                                        <div className="mb-6 p-4 bg-blue-50/50 rounded-2xl border border-blue-100 border-dashed"><div className="flex justify-between items-center mb-3"><span className="text-xs font-black text-blue-700 flex items-center gap-1 font-black"><Upload className="w-3.5 h-3.5" /> 엑셀 일괄 업로드</span><button onClick={handleDownloadSample} className="text-[10px] text-blue-600 underline font-bold tracking-tight font-black">양식 받기</button></div><label className="w-full bg-white hover:bg-slate-50 text-slate-700 font-bold py-4 rounded-xl border-2 border-slate-200 flex items-center justify-center gap-2 cursor-pointer shadow-sm transition-all tracking-tight font-black"><FileSpreadsheet className="w-4 h-4 text-emerald-600" /> 파일 선택 및 업로드<input type="file" accept=".xlsx, .xls, .csv" className="hidden" onChange={handleFileUpload} /></label></div>
+                                    )}
+                                    <div className="space-y-4 pt-2">
+                                        <h4 className="text-xs font-black text-blue-600 uppercase tracking-widest px-1 font-black underline underline-offset-4 decoration-blue-200">{setupEditMode ? '선택 설비 정보 수정' : '신규 개별 등록'}</h4>
+                                        <div className="flex gap-3"><input type="text" placeholder="설비 ID" disabled={setupEditMode} className={`flex-[3] p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none font-bold text-slate-700 focus:border-blue-500 transition-all ${setupEditMode ? 'opacity-50 grayscale' : ''}`} value={newEqId} onChange={e=>setNewEqId(e.target.value)} /><select className="flex-1 p-3 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none font-black text-blue-600 focus:border-blue-500 font-black" value={newEqClass} onChange={e=>setNewEqClass(e.target.value)}><option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option></select></div>
+                                        <input type="text" placeholder="설비명 (예: 가압 송출 펌프)" className="w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none font-bold text-slate-700 focus:border-blue-500 transition-all font-black" value={newEqName} onChange={e=>setNewEqName(e.target.value)} />
+                                        <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 shadow-sm font-black">
+                                            <p className="text-xs font-black text-slate-400 mb-3 uppercase tracking-tighter flex items-center gap-1.5 font-black"><ShieldCheck className="w-3.5 h-3.5" /> 점검 부위 및 항목 설정</p>
+                                            <div className="flex flex-wrap gap-2 mb-4 font-black">{ALL_PARTS.map(part => { const isChecked = newDefaultParts.includes(part); return (<button key={part} onClick={() => setNewDefaultParts(prev => isChecked ? prev.filter(p => p !== part) : [...prev, part])} className={`px-3 py-1.5 rounded-full text-[11px] font-black border transition-all ${isChecked ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-slate-400 border-slate-200 shadow-sm'}`}>{part}</button>); })}</div>
+                                            <p className="text-[10px] font-black text-slate-300 mb-2 uppercase tracking-widest font-black">기타 정밀 항목 노출 여부</p>
+                                            <div className="flex flex-wrap gap-2 font-black">
+                                                {OIL_FIELDS.map(p => (<button key={p} onClick={() => setNewOilParts(prev => newOilParts.includes(p) ? prev.filter(x => x !== p) : [...prev, p])} className={`px-2.5 py-1.5 rounded-lg text-[10px] font-black border transition-all ${newOilParts.includes(p) ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' : 'bg-white text-slate-400 border-slate-100 shadow-sm'}`}>오일:{p}</button>))}
+                                                {EXTRA_FIELDS.map(p => (<button key={p} onClick={() => setNewExtraParts(prev => newExtraParts.includes(p) ? prev.filter(x => x !== p) : [...prev, p])} className={`px-2.5 py-1.5 rounded-lg text-[10px] font-black border transition-all ${newExtraParts.includes(p) ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' : 'bg-white text-slate-400 border-slate-100 shadow-sm'}`}>기타:{p}</button>))}
+                                            </div>
                                         </div>
-                                        <input type="text" placeholder="설비명 (가압 펌프 A)" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none font-bold text-slate-700 focus:ring-2 focus:ring-blue-500" value={newEqName} onChange={e=>setNewEqName(e.target.value)} />
-                                        <button onClick={handleAddEquipment} className="w-full bg-slate-800 hover:bg-slate-900 text-white font-black py-4 rounded-2xl shadow-xl transition-all active:scale-95 flex items-center justify-center gap-2"><Plus className="w-5 h-5" /> 리스트에 설비 추가</button>
+                                        <div className="flex gap-2">{setupEditMode && <button onClick={() => { setSetupEditMode(false); setNewEqId(''); setNewEqName(''); setNewDefaultParts([]); setNewOilParts([]); setNewExtraParts([]); }} className="flex-1 py-4.5 rounded-2xl text-slate-500 font-black border-2 border-slate-100 hover:bg-slate-100 transition-all shadow-sm font-black">취소</button>}<button onClick={handleAddEquipment} className="flex-[2] bg-slate-900 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 flex items-center justify-center gap-2 transition-all font-black"><Plus className="w-5 h-5" /> {setupEditMode ? '정보 수정 완료' : '마스터 추가'}</button></div>
                                     </div>
                                 </div>
-                                <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm max-h-[300px] overflow-y-auto divide-y divide-slate-50">
-                                    <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3">등록된 설비 리스트</h4>
-                                    {equipments.map(eq => (
-                                        <div key={eq.id} className="flex justify-between items-center py-3.5">
-                                            <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 tracking-tighter uppercase">{eq.eqClass} CLASS</span><span className="text-sm font-extrabold text-slate-700"><b>[{eq.id}]</b> {eq.name}</span></div>
-                                            <button onClick={() => confirm('설비를 영구 삭제할까요?') && deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'equipments', eq.id))} className="p-2 text-slate-300 hover:text-rose-500 transition-colors active:scale-90"><Trash2 className="w-4 h-4" /></button>
+                                <div className="bg-white p-5 rounded-3xl border border-slate-200 max-h-[350px] overflow-y-auto shadow-sm divide-y divide-slate-50 font-bold">
+                                    <h4 className="text-xs font-black text-slate-400 mb-4 tracking-widest uppercase px-1 font-black underline">등록 설비 마스터 ({equipments.length}건)</h4>
+                                    {sortedEquipments.map(eq => (
+                                        <div key={eq.id} className="flex justify-between items-center py-4 px-1 group transition-all hover:bg-blue-50/50 active:bg-blue-100 cursor-pointer rounded-xl" onClick={() => handleSetupItemClick(eq)}>
+                                            <div className="flex flex-col"><span className="text-[9px] font-black text-blue-500 uppercase tracking-tighter mb-0.5 font-black">{eq.eqClass}급</span><span className="text-sm font-extrabold text-slate-800 tracking-tight font-black">[{eq.id}] {eq.name}</span><span className="text-[8px] text-slate-300 font-bold tracking-tighter uppercase font-black tracking-tight">부위: {eq.defaultParts?.length} / 오일: {eq.oilParts?.length} / 기타: {eq.extraParts?.length}</span></div>
+                                            <button onClick={(e) => { e.stopPropagation(); setDeleteModalState({ isOpen: true, eqId: eq.id, password: '', error: '' }); }} className="p-2 text-slate-200 hover:text-rose-500 transition-all active:scale-90"><Trash2 className="w-5 h-5" /></button>
                                         </div>
                                     ))}
                                 </div>
-                                <button onClick={() => setCurrentUser('')} className="w-full py-4.5 rounded-2xl text-slate-400 font-black border-2 border-slate-100 hover:bg-slate-100 transition-all flex items-center justify-center gap-2"><LogOut className="w-5 h-5" /> 시스템 로그아웃</button>
+                                <button onClick={() => setCurrentUser('')} className="w-full py-4.5 rounded-2xl text-slate-400 font-black border-2 border-slate-100 hover:bg-slate-100 transition-all flex items-center justify-center gap-2 active:scale-95 shadow-sm font-black font-black"><LogOut className="w-5 h-5" /> 로그아웃</button>
                             </div>
                         )}
                     </main>
 
-                    {toast.show && (
-                        <div className={`fixed top-10 left-1/2 -translate-x-1/2 px-8 py-4 rounded-3xl shadow-2xl text-white text-sm font-black flex items-center z-[100] animate-in slide-in-from-top-10 duration-500 ${toast.type === 'error' ? 'bg-rose-500' : 'bg-slate-900/90 backdrop-blur-md'}`}>
-                            {toast.type === 'error' ? <AlertTriangle className="w-5 h-5 mr-3" /> : <CheckCircle2 className="w-5 h-5 text-emerald-400 mr-3" />}
-                            {toast.message}
+                    {toast.show && (<div className={`fixed top-10 left-1/2 -translate-x-1/2 px-8 py-4 rounded-3xl shadow-2xl text-white text-sm font-black flex items-center z-[130] animate-in slide-in-from-top-10 duration-500 ${toast.type === 'error' ? 'bg-rose-500' : 'bg-slate-900/90 backdrop-blur-md'}`}>{toast.type === 'error' ? <AlertTriangle className="w-5 h-5 mr-3" /> : <CheckCircle2 className="w-5 h-5 text-emerald-400 mr-3" />}{toast.message}</div>)}
+                    {photoModal && (<div className="fixed inset-0 bg-black/90 z-[140] flex items-center justify-center p-4 animate-in fade-in duration-300 shadow-2xl font-black" onClick={() => setPhotoModal(null)}><button className="absolute top-6 right-6 text-white bg-black/50 rounded-full p-2"><X className="w-6 h-6" /></button><img src={photoModal} alt="확대" className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl border-4 border-white/10" onClick={e=>e.stopPropagation()} /></div>)}
+                    {deleteModalState.isOpen && (
+                        <div className="fixed inset-0 bg-black/50 z-[150] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-200">
+                            <div className="bg-white rounded-3xl p-8 w-full max-w-xs animate-in zoom-in-95 duration-200 shadow-2xl text-center"><h3 className="font-black text-xl mb-3 text-slate-800 tracking-tight underline font-black">설비 삭제 확인</h3><p className="text-xs text-slate-400 mb-6 leading-relaxed font-bold tracking-tight"><b>[{deleteModalState.eqId}]</b> 설비를 영구 삭제하시겠습니까? <br/>비밀번호 <b>kpb1234</b>를 입력하세요.</p><input type="password" placeholder="비밀번호" className="w-full p-3 bg-slate-50 border-2 border-slate-200 rounded-xl mb-4 text-center font-bold outline-none transition-all focus:border-blue-500 font-black" value={deleteModalState.password} onChange={e => setDeleteModalState(prev => ({ ...prev, password: e.target.value, error: '' }))} />{deleteModalState.error && <p className="text-xs text-rose-500 mb-4 font-bold text-center font-black">{deleteModalState.error}</p>}<div className="flex gap-2"><button onClick={() => setDeleteModalState({ isOpen: false, eqId: null, password: '', error: '' })} className="flex-1 py-3 bg-slate-100 rounded-xl text-sm font-bold text-slate-500 active:scale-95 transition-all font-black">취소</button><button onClick={handleConfirmDelete} className="flex-1 py-3 bg-rose-600 text-white rounded-xl text-sm font-bold active:scale-95 transition-all font-black shadow-lg">삭제 확인</button></div></div>
                         </div>
                     )}
 
-                    <nav className="bg-white/80 backdrop-blur-xl border-t border-slate-100 fixed bottom-0 w-full max-w-md flex justify-around p-3 pb-8 shadow-[0_-10px_40px_rgba(0,0,0,0.04)] rounded-t-[40px] z-50">
-                        <button className={`flex flex-col items-center gap-1.5 p-3 rounded-2xl transition-all ${activeTab === 'form' ? 'text-blue-600 scale-110' : 'text-slate-300'}`} onClick={() => setActiveTab('form')}><ClipboardCheck className="w-6 h-6" /><span className="text-[10px] font-black">점검하기</span></button>
-                        <button className={`flex flex-col items-center gap-1.5 p-3 rounded-2xl transition-all ${activeTab === 'history' ? 'text-blue-600 scale-110' : 'text-slate-300'}`} onClick={() => setActiveTab('history')}><History className="w-6 h-6" /><span className="text-[10px] font-black">기록보기</span></button>
-                        <button className={`flex flex-col items-center gap-1.5 p-3 rounded-2xl transition-all ${activeTab === 'settings' ? 'text-blue-600 scale-110' : 'text-slate-300'}`} onClick={() => setActiveTab('settings')}><Settings className="w-6 h-6" /><span className="text-[10px] font-black">설정관리</span></button>
+                    <nav className="bg-white/90 backdrop-blur-md border-t border-slate-100 fixed bottom-0 w-full max-w-md flex justify-around p-3 pb-8 shadow-[0_-10px_40px_rgba(0,0,0,0.05)] z-50 rounded-t-[40px]">
+                        <button className={`flex flex-col items-center gap-1.5 p-3 rounded-2xl transition-all ${activeTab === 'form' ? 'text-blue-600 scale-110 font-black' : 'text-slate-300 font-bold'}`} onClick={() => setActiveTab('form')}><ClipboardCheck className="w-7 h-7" /><span className="text-[10px] uppercase tracking-tighter font-black tracking-widest">CHECK</span></button>
+                        <button className={`flex flex-col items-center gap-1.5 p-3 rounded-2xl transition-all ${activeTab === 'history' ? 'text-blue-600 scale-110 font-black' : 'text-slate-300 font-bold'}`} onClick={() => setActiveTab('history')}><History className="w-7 h-7" /><span className="text-[10px] uppercase tracking-tighter font-black tracking-widest">REPORT</span></button>
+                        <button className={`flex flex-col items-center gap-1.5 p-3 rounded-2xl transition-all ${activeTab === 'settings' ? 'text-blue-600 scale-110 font-black' : 'text-slate-300 font-bold'}`} onClick={() => setActiveTab('settings')}><Settings className="w-7 h-7" /><span className="text-[10px] uppercase tracking-tighter font-black tracking-widest">SETUP</span></button>
                     </nav>
                 </div>
             );
